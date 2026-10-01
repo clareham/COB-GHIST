@@ -1,0 +1,12 @@
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+#Note: no package managers currently included!
+
+version: 2
+updates:
+  - package-ecosystem: "" 
+  #Possible package managers: pip, pip2, r package installers
+    directory: "/" # Location of package manifests
+    schedule:
+      interval: "weekly"
