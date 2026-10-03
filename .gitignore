@@ -31,3 +31,25 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+src/*.o
+src/*.so
+src/*.dll
+/vignettes/*.html
+/vignettes/*.pdf
+inst/doc/
+docs/
+.httr-oauth
+
+# renv / packrat
+renv/library/
+renv/python/
+renv/staging/
+packrat/lib*/
+packrat/src/

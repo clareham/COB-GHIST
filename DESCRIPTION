@@ -1,0 +1,12 @@
+Package: COBGHIST
+Title: GHIST Challenge with Chicago Open Bioinformatics
+Version: 0.1.0
+Authors@R:
+    person("Chicago Open Bioinformatics", , , "cob@example.com", role = c("aut", "cre"))
+Description: Tools and analyses developed for the GHIST challenge by Chicago
+    Open Bioinformatics.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
