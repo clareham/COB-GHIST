@@ -44,7 +44,6 @@ src/*.dll
 /vignettes/*.html
 /vignettes/*.pdf
 inst/doc/
-docs/
 .httr-oauth
 
 # renv / packrat
