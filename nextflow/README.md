@@ -103,17 +103,69 @@ see Limitations). What *has* been verified by actually running this
 pipeline in this environment:
 - The full config hierarchy parses cleanly (`nextflow config .`).
 - Channel fan-out produces exactly the expected task count per tool
-  across all three categories (e.g. `PSMC`: 6 tasks, one per applicable
-  genetic_history challenge; `SWEEPFINDER2`/`FLEXSWEEP`: 4 tasks each
-  across the four sweep challenges; `KING_PLINK`/`NGSRELATE`/
+  across all three categories (e.g. `PSMC`: 4 VCF-based tasks, correctly
+  skipping the two BAM-based `*_low_coverage` challenges when their
+  archives aren't present locally; `SWEEPFINDER2`/`FLEXSWEEP`: 4 tasks
+  each across the four sweep challenges; `KING_PLINK`/`NGSRELATE`/
   `ADMIXTURE`/`SHAPEIT5`: 3 tasks each, correctly skipping
   `relatedness1`; every `stub`/`excluded` tool: 0 tasks).
-- `PSMC` on `bottleneck_low_coverage` runs for real end to end via
-  `-profile conda` against the actual testing FASTA and produces a real
-  `.psmc` file - which (as documented) comes back with `sum_n:0`
-  (zero heterozygous windows detected), i.e. exactly the flat/uninformative
-  curve the caveat predicts, since that challenge only hands out a single
-  haploid sequence with no het signal.
+- `PSMC` on a real `-profile conda` run produced a genuine `.psmc` file
+  end to end - that first real run (before the wiki cross-check below)
+  used `bottleneck_low_coverage`'s bare reference FASTA directly and came
+  back with `sum_n:0` (zero heterozygous windows), which is exactly what
+  you'd expect from a single haploid sequence with no het signal to find.
+  That result is *why* the data format was cross-checked against the
+  official GHIST wiki (see next section) - it turned out the real
+  challenge data is low-coverage BAMs, not a bare FASTA, and the module
+  has since been rewritten accordingly (untested against real reads, see
+  Limitations).
+- That rewrite surfaced a real Nextflow bug during testing: passing the
+  same file object to two separate `path` inputs caused a work-directory
+  staging name collision, fixed via `stageAs` (see
+  `modules/genetic_history/psmc/main.nf`).
+
+## Data validation against the official GHIST wiki
+
+The [GHIST 2026 Synapse wiki](https://www.synapse.org/Synapse:syn74803798/wiki/640740)
+documents the exact data format/metadata for every challenge. Cross-
+referencing every file ID it links against `manifest.csv` found our local
+data drop has **41 of 55** referenced files; the other 14 fall into three
+buckets:
+
+- **High impact, since fixed in config/code but not yet runnable**: the
+  `*_low_coverage` challenges' real data is a `tar.gz` archive of 20
+  diploid individuals' aligned BAMs (~2-4x coverage) + a `popfile.txt`,
+  not the bare consensus FASTA this pipeline originally assumed (see
+  below). The archives (`syn77432049`, `syn77432048`, `syn77432188`,
+  `syn77432194`) require Synapse challenge-team authentication this
+  environment doesn't have - `psmc`/`msmc2` have been rewritten for the
+  real BAM format and will run automatically once you download the
+  archives into `data_dir` yourself, but that rewrite is unverified
+  against real reads in the meantime.
+- **Medium impact, genuinely missing, pipeline still runs without them**:
+  recombination maps for `growth`/`split_migration` (`syn75318370`/
+  `syn75318369`) and for sweep detection chr7/chr9 (`syn77026803`/
+  `syn77026807`), plus sweep detection's exon/Havana annotations
+  (`syn77027375`/`syn77027379`). Not wired into any module yet.
+- **Not actually a gap - an opportunity**: unlike every other category,
+  the relatedness challenges' *testing* ground truth is itself a public,
+  downloadable file (`syn75202646`, `syn75158967`, `syn75203704`,
+  `syn75203706`), not just inline-revealed numbers. Worth downloading to
+  validate `king_plink`/`ngsrelate`/`admixture` output - something no
+  other category allows.
+
+Two correctness bugs were also caught this way and fixed:
+1. `growth.config` was missing `coding_regions_bed` - the wiki confirms
+   "Growth" is explicitly "Growth **with Background Selection**", using
+   the same BED as `split_migration`.
+2. (Not yet fixed - flagged for a future pass) relatedness VCFs are
+   documented as "phased and error-free", so `shapeit5`'s "phasing
+   prerequisite" framing is inaccurate for this data; and the actual
+   expected *output* for relatedness2/3/4 is a relationship label/meiosis
+   count per pair (siblings, avuncular, Nth cousin, ...), which
+   `king_plink`/`ngsrelate`'s raw kinship coefficients don't directly
+   provide - there's no classification step from coefficient -> label
+   yet.
 
 ## Running it
 
@@ -138,18 +190,26 @@ Toggle scope at any level without touching code:
 - **No ground truth is available locally** (by design - `*.final.*` is
   held out), so there's no way to score inference accuracy here. Validate
   methods first against your own `msprime`/`stdpopsim` simulations with
-  known parameters, then apply to the real testing data.
+  known parameters, then apply to the real testing data. (Exception:
+  the relatedness challenges' testing answers are public - see above.)
 - **No popmap for two-population challenges** (`secondary_contact`,
   `split_migration`): `fastsimcoal2`'s SFS is pooled into a single
   population rather than a true joint 2D SFS (see `bin/vcf_to_sfs.py`).
-- **`*_low_coverage` challenges ship a single haploid consensus FASTA**,
-  not reads/BAM or a diploid pair - `psmc` runs on it but produces a
-  structural placeholder, not a validated inference (verified above);
-  `msmc2` is excluded outright for lacking any het signal to use.
+- **The `*_low_coverage` challenges' BAM archives aren't downloaded**
+  (require Synapse challenge-team auth - see above). `psmc`/`msmc2` are
+  wired up for the real BAM+popfile format (`bin/bam_sample_to_psmcfa.sh`,
+  `bin/bam_archive_to_merged_vcf.sh`, `bin/bam_to_depth_mask.py`) and will
+  run automatically once the archives are in `data_dir`, but that whole
+  path is `status: 'runnable-unverified'` - none of it has executed
+  against real reads yet.
 - **`relatedness1`'s testing data is already pairwise IBD segments**, not
   genotypes - none of the catalogued relatedness tools take that as
   primary input, so its `tools {}` map is intentionally empty pending a
   clearer idea of the intended task/tool.
+- **Relatedness output gap**: the challenges want a relationship
+  label/meiosis count per pair, not just a raw kinship coefficient -
+  `king_plink`/`ngsrelate`/`admixture` only provide the latter; no
+  classification step exists yet.
 - **RAiSD, SweeD, OmegaPlus, Stairway Plot 2, fastGLOBETROTTER, ArchIE2,
   READ/KIN, IcMLkin, GRUPS-rs, PHLASH** are `stub`s: no conda/PyPI
   package was found, and (per explicit direction) compiling tools like

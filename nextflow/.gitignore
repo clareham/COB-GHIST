@@ -2,3 +2,5 @@ work/
 .nextflow/
 .nextflow.log*
 results/
+__pycache__/
+.env

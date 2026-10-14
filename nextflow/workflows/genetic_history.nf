@@ -25,12 +25,29 @@ workflow GENETIC_HISTORY {
 
     params.genetic_history.challenges.each { chName, chConf ->
         if (!chConf.enabled) return
-        def fileName = chConf.input_type == 'vcf' ? chConf.testing_vcf_name : chConf.testing_fasta_name
-        def inputFile = GhistUtils.testingFile(params.data_dir, fileName)
-        if (!inputFile.exists()) {
-            log.warn "genetic_history/${chName}: testing file not found (${inputFile}), skipping challenge"
+
+        // 'vcf' challenges: one file, no separate reference exists.
+        // 'bam' challenges (the *_low_coverage ones): an archive of
+        // per-individual BAMs + popfile.txt, plus the reference FASTA
+        // needed to call variants from them.
+        def mainName = chConf.input_type == 'vcf' ? chConf.testing_vcf_name : chConf.testing_archive_name
+        def mainFile = GhistUtils.testingFile(params.data_dir, mainName)
+        if (!mainFile.exists()) {
+            log.warn "genetic_history/${chName}: testing file not found (${mainFile}), skipping challenge"
             return
         }
+        // PSMC/MSMC2 take (main_file, ref_file) uniformly across both
+        // input types - 'vcf' challenges pass a harmless placeholder
+        // (reusing mainFile) since that script branch never reads it.
+        def refFile = mainFile
+        if (chConf.input_type == 'bam') {
+            refFile = GhistUtils.testingFile(params.data_dir, chConf.testing_fasta_name)
+            if (!refFile.exists()) {
+                log.warn "genetic_history/${chName}: reference FASTA not found (${refFile}), skipping challenge"
+                return
+            }
+        }
+
         chConf.tools.each { toolName, toolConf ->
             if (!toolConf.enabled) return
             def meta = [
@@ -41,7 +58,11 @@ workflow GENETIC_HISTORY {
                 args      : toolConf.args ?: '',
                 reason    : toolConf.reason ?: '',
             ]
-            byTool[toolName] << tuple(meta, file(inputFile))
+            if (toolName in ['psmc', 'msmc2']) {
+                byTool[toolName] << tuple(meta, file(mainFile), file(refFile))
+            } else {
+                byTool[toolName] << tuple(meta, file(mainFile))
+            }
         }
     }
 
