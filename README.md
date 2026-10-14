@@ -3,10 +3,34 @@ GHIST challenge with Chicago Open Bioinformatics
 
 ## Installation & Setup
 
-- Python
-- R (lang)
-- Nextflow
+### Python: Retrieving Data Files
 
-### Survey of Existing Tools
+Data files are pulled from Synapse programmatically via [pysrc/synapse_retrieval.py](pysrc/synapse_retrieval.py). To use it:
+
+1. Create a Python environment (3.10–3.13; `synapseclient` doesn't yet support 3.14+) and install the project from the repo root:
+
+   ```bash
+   conda create -n ghist26 python=3.12
+   conda activate ghist26
+   pip install -e .
+   ```
+
+2. Add a Synapse [personal access token](https://help.synapse.org/docs/Managing-Your-Account.2055405596.html#ManagingYourAccount-PersonalAccessTokens) to a `.env` file in the repo root (gitignored):
+
+   ```
+   SYNAPSE-PAT=<your-synapse-personal-access-token>
+   ```
+
+3. Run the script to download and unpack the data into `data/`:
+
+   ```bash
+   python pysrc/synapse_retrieval.py
+   ```
+
+### R (lang)
+
+### Nextflow
+
+## Survey of Existing Tools
 
 You may need to install nextflow: [Install Instructions](https://docs.seqera.io/nextflow/install#self-install). This makes it possible to quickly run each of the legacy tools in their own environment rather than lengthy configuration for local installation. Some of these tools are also quite old and may have maintenance issues making them incompatible with modern hardware / ecosystems. Using docker containers, nextflow can isolate and run each tool in its own environment.
