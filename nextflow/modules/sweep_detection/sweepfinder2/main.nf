@@ -4,8 +4,9 @@
  *
  * Converts the VCF to SweepFinder2's .freq format (bin/vcf_to_sweepfinder_freq.py,
  * unfolded - see that script's ancestral-allele assumption), builds the
- * background/empirical spectrum with `-f`, then scans with `-l` (or
- * whatever's set in `args`) across the whole contig.
+ * background/empirical spectrum with `-f`, then scans with `-l G` across
+ * the whole contig. `args` must include both the scan mode and its grid
+ * argument; challenge configs default to `-l 1000` (1,000 scan positions).
  */
 process SWEEPFINDER2 {
     tag "${meta.challenge}"
