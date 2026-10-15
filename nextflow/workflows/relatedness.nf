@@ -29,10 +29,15 @@ workflow RELATEDNESS {
         }
         chConf.tools.each { toolName, toolConf ->
             if (!toolConf.enabled) return
+            if (toolName in ['king_plink', 'admixture'] &&
+                (!(chConf.autosomes instanceof Integer) || chConf.autosomes < 1)) {
+                error "relatedness/${chName}: ${toolName} requires a positive diploid autosome count"
+            }
             def meta = [
                 category  : 'relatedness',
                 challenge : chName,
                 input_type: chConf.input_type,
+                autosomes : chConf.autosomes,
                 conda     : toolConf.conda,
                 args      : toolConf.args ?: '',
                 k         : toolConf.k ?: 3,

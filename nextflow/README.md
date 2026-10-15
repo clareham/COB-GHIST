@@ -5,7 +5,7 @@ This is a tool-survey scaffold, not a scientifically validated analysis.
 
 ## Quick start
 
-Install Nextflow and Conda, then download the challenge data using the
+Install Nextflow (>=24.04) and Conda, then download the challenge data using the
 [repository setup instructions](../README.md#installation--setup).
 From the repository root:
 
@@ -40,6 +40,10 @@ To disable a challenge or individual tool, change its `enabled` flag in
 `conf/<category>/<challenge>.config`. Missing challenge inputs are skipped
 with a warning.
 
+Flex-Sweep, fastsimcoal2, and mrpast are disabled pending implementation;
+their modules fail explicitly if manually enabled. SHAPEIT5 is also disabled
+because the relatedness VCFs are already phased.
+
 **Only testing inputs are allowed.** Held-out `*.final.*` scoring files
 must never be consumed; [GhistUtils](lib/GhistUtils.groovy) enforces the
 testing-file naming guard.
@@ -62,7 +66,16 @@ Tool status is descriptive; `enabled` controls execution:
 | `runnable-unverified` | Packaged tool; exact invocation still needs verification |
 | `runnable-with-caveat` | Runs, but input suitability is limited |
 | `excluded` | Not appropriate for the challenge |
-| `stub` | Implementation/install work required; disabled by default |
+| `stub` | Integration and/or installation required; disabled by default |
+
+PLINK uses 22 diploid autosome pairs for human challenges and 38 for dog
+(`autosomes` in each relatedness config). ADMIXTURE's `k: 3` remains a
+survey choice, not a validated population count.
+
+Tasks request 2 CPUs, 4 GB, and 2 hours by default. `--max_cpus`,
+`--max_memory`, and `--max_time` cap **per-task** requests via
+`resourceLimits` (requires Nextflow >=24.04); they do not cap total local
+concurrency. Multithreaded wrappers use the allocated `task.cpus`.
 
 ### SweepFinder2 resolution
 
@@ -83,10 +96,14 @@ spectrum estimation, and scanning together because they share one process.
   final scoring data remains held out.
 - **Low-coverage inputs:** BAM archives require Synapse challenge-team
   access. The PSMC/MSMC2 BAM workflows are unverified against real reads.
-- **Unverified tools:** Flex-Sweep, fastsimcoal2, and mrpast need their
-  exact CLI/data handling checked. See each tool's config and module.
-- **Two-population SFS:** fastsimcoal2 currently pools samples rather than
-  building a joint 2D spectrum for `secondary_contact` / `split_migration`.
+- **Incomplete integrations:** Flex-Sweep needs feature extraction and a
+  trained model; fastsimcoal2 needs challenge-specific models and matching
+  SFS sample sizes (joint SFS/population maps for two-population cases);
+  mrpast needs model/population mapping, dated ARGs, and process/solve.
+- **Demography caveats remain:** PSMC's VCF converter treats windows with
+  no records as uncallable. MSMC2 does not handle BAM phase ambiguity or
+  perform separate within/cross-population runs for split-time inference.
+  Do not interpret their current output as validated demographic estimates.
 - **Relatedness:** `relatedness1` contains IBD segments, so has no enabled
   tools. Other relatedness challenges still need relationship-label/meiosis
   classification from raw estimates; their VCFs are already phased, so

@@ -1,10 +1,10 @@
 /*
  * KING + PLINK2
- * Status: runnable (bioconda: king, plink2)
+ * Status: runnable (bioconda: plink2)
  *
  * Converts VCF -> PLINK2 pgen/pvar/psam, then runs KING's kinship
- * estimator (`--kinship`) via plink2's bundled KING-robust algorithm, so
- * only one binary round-trip is needed (no intermediate PLINK1 .bed).
+ * estimator via plink2's bundled KING-robust algorithm. The challenge
+ * supplies the number of diploid autosome pairs (22 human, 38 dog).
  */
 process KING_PLINK {
     tag "${meta.challenge}"
@@ -19,7 +19,11 @@ process KING_PLINK {
 
     script:
     """
-    plink2 --vcf ${input_file} --make-pgen --out ${meta.challenge} --allow-extra-chr --chr-set -1
-    plink2 --pfile ${meta.challenge} --make-king-table ${meta.args} --out ${meta.challenge} --allow-extra-chr --chr-set -1
+    plink2 --vcf ${input_file} --make-pgen --out ${meta.challenge} --allow-extra-chr --chr-set ${meta.autosomes} --threads ${task.cpus} --memory ${task.memory.toMega()}
+    plink2 --pfile ${meta.challenge} --make-king-table ${meta.args} --out ${meta.challenge} --allow-extra-chr --chr-set ${meta.autosomes} --threads ${task.cpus} --memory ${task.memory.toMega()}
+    if [ ! -s ${meta.challenge}.kin0 ]; then
+        echo "ERROR: PLINK2 did not produce a nonempty KING table" >&2
+        exit 1
+    fi
     """
 }

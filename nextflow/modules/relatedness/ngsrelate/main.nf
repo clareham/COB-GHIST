@@ -3,7 +3,7 @@
  * Status: runnable (bioconda: ngsrelate, bcftools)
  *
  * NgsRelate natively supports reading genotype calls straight from a VCF
- * (`-T GT`), bypassing its usual genotype-likelihood route - appropriate
+ * (`-T GT -c 1`), bypassing its usual genotype-likelihood route - appropriate
  * here since these are simulated VCFs with hard GT calls, not real
  * low-coverage data with PL/GL fields.
  */
@@ -22,6 +22,10 @@ process NGSRELATE {
     """
     bgzip -c ${input_file} > ${meta.challenge}.vcf.gz
     tabix -p vcf ${meta.challenge}.vcf.gz
-    NgsRelate -h ${meta.challenge}.vcf.gz -T GT -O ${meta.challenge}.ngsrelate.res ${meta.args}
+    ngsRelate -h ${meta.challenge}.vcf.gz -T GT -c 1 -p ${task.cpus} -O ${meta.challenge}.ngsrelate.res ${meta.args}
+    if [ ! -s ${meta.challenge}.ngsrelate.res ]; then
+        echo "ERROR: ngsRelate did not produce a nonempty result" >&2
+        exit 1
+    fi
     """
 }

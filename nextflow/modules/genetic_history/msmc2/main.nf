@@ -15,8 +15,7 @@
  *          of per-individual BAMs + popfile.txt + reference FASTA.
  *          bin/bam_archive_to_merged_vcf.sh picks up to 2 individuals
  *          (one per population if `split_isolation_low_coverage`'s
- *          popfile lists 2 populations - giving MSMC2 the cross-
- *          population haplotype pairing its split-time estimate needs;
+ *          popfile lists 2 populations;
  *          otherwise the first 2 individuals from the single population,
  *          for `bottleneck_low_coverage`), calls each with bcftools
  *          mpileup/call, builds a real per-sample depth-based
@@ -24,6 +23,10 @@
  *          them - then bin/vcf_to_multihetsep.py --mask uses that real
  *          mask instead of the "every site is callable" assumption the
  *          vcf path has to make.
+ *
+ * Scientific limitations: BAM calls are unphased but the converter does
+ * not encode phase ambiguity. Empty args pool all haplotype pairs;
+ * split-time inference needs separate within/cross-population runs.
  */
 process MSMC2 {
     tag "${meta.challenge}"
@@ -41,16 +44,28 @@ process MSMC2 {
     tuple val(meta), path("${meta.challenge}.msmc2.final.txt"), emit: result
 
     script:
-    // bioconda's msmc2 recipe installs the binary as 'msmc2_Linux' (or
-    // 'msmc2_Darwin' on macOS) - there is no plain 'msmc2' alias -
-    // confirmed when this module was first run against real data, so
-    // resolve the actual binary name at runtime instead of hardcoding it.
-    def msmc2Bin = 'MSMC2_BIN=$(compgen -c | grep -E "^msmc2(_Linux|_Darwin)?$" | head -1)'
+    def msmc2Bin = '''
+        MSMC2_BIN=""
+        for candidate in msmc2 msmc2_Linux msmc2_Darwin; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+                MSMC2_BIN="$candidate"
+                break
+            fi
+        done
+        if [ -z "$MSMC2_BIN" ]; then
+            echo "ERROR: no MSMC2 executable found on PATH" >&2
+            exit 1
+        fi
+    '''
     if (meta.input_type == 'vcf')
         """
         ${msmc2Bin}
         vcf_to_multihetsep.py ${main_file} ${meta.challenge}.multihetsep.txt
-        "\$MSMC2_BIN" ${meta.args} -o ${meta.challenge}.msmc2 ${meta.challenge}.multihetsep.txt
+        "\$MSMC2_BIN" ${meta.args} -t ${task.cpus} -o ${meta.challenge}.msmc2 ${meta.challenge}.multihetsep.txt
+        if [ ! -s ${meta.challenge}.msmc2.final.txt ]; then
+            echo "ERROR: MSMC2 did not produce a nonempty final result" >&2
+            exit 1
+        fi
         """
     else
         """
@@ -58,6 +73,10 @@ process MSMC2 {
         bam_archive_to_merged_vcf.sh ${main_file} ${ref_file} ${meta.challenge}
         vcf_to_multihetsep.py ${meta.challenge}.merged.vcf.gz ${meta.challenge}.multihetsep.txt \
             --mask ${meta.challenge}.mask.bed --max-samples 2
-        "\$MSMC2_BIN" ${meta.args} -o ${meta.challenge}.msmc2 ${meta.challenge}.multihetsep.txt
+        "\$MSMC2_BIN" ${meta.args} -t ${task.cpus} -o ${meta.challenge}.msmc2 ${meta.challenge}.multihetsep.txt
+        if [ ! -s ${meta.challenge}.msmc2.final.txt ]; then
+            echo "ERROR: MSMC2 did not produce a nonempty final result" >&2
+            exit 1
+        fi
         """
 }
