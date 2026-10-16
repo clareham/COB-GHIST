@@ -1,0 +1,12 @@
+name: mrpast-survey
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::mrpast=0.5
+  - conda-forge::tsinfer=0.5.1
+  - bioconda::bio2zarr=0.2.1
+  - conda-forge::python=3.11
+  - pip
+  - pip:
+      - tsdate==0.2.7

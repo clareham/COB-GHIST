@@ -1,112 +1,124 @@
 #!/usr/bin/env python3
-"""Build an MSMC2 'multihetsep' file directly from a VCF.
+"""Create MSMC2 multihetsep input, preserving unphased genotype ambiguity.
 
-msmc-tools' own generate_multihetsep.py isn't packaged on bioconda/PyPI
-(it's a small script you'd otherwise have to git-clone by hand), so this
-reproduces the multihetsep format directly:
-
-  --mask not given: every site is treated as callable and
-    'nSitesSincePrevCall' is just the physical distance since the
-    previous emitted site. Appropriate for the regular demography VCF
-    challenges, where no reference/coverage mask exists at all.
-
-  --mask <bed>: 'nSitesSincePrevCall' instead counts actual callable
-    bases (from a real callability mask, e.g. bin/bam_to_depth_mask.py's
-    output for the low-coverage BAM-based challenges), and sites falling
-    outside any masked interval are skipped entirely - this is the
-    correct, mask-aware behaviour MSMC2 expects.
-
-Output columns (tab-separated): CHROM POS N_SITES_SINCE_PREV ALLELES
+An explicit --assume-callable is required without a BED. Invariant sites
+are not emitted, but callable invariant bases contribute to distances.
+Use --split to write one input file per contig (required by MSMC2).
 """
+
 import argparse
-import bisect
-from collections import defaultdict
+import itertools
+import sys
+from contextlib import ExitStack
+from pathlib import Path
 
 from cyvcf2 import VCF
 
+from callable_regions import callable_bases_in_range, contig_lengths, is_callable, load_mask
 
-def load_mask(path):
-    """BED (0-based, half-open) -> {chrom: (starts, ends)}, sorted & assumed non-overlapping."""
-    by_chrom = defaultdict(list)
-    with open(path) as f:
-        for line in f:
-            if not line.strip() or line.startswith(("#", "track", "browser")):
+
+def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=False, split=False):
+    if mask_path is None and not assume_callable:
+        raise ValueError("Provide a callability BED or explicitly choose --assume-callable")
+    vcf = VCF(vcf_path)
+    selected = list(samples) if samples is not None else vcf.samples[:2]
+    if not selected or len(set(selected)) != len(selected) or set(selected) - set(vcf.samples):
+        raise ValueError("Requested samples must be a nonempty, unique subset of VCF samples")
+    vcf.set_samples(selected)
+    lengths = contig_lengths(vcf)
+    mask = load_mask(mask_path) if mask_path else None
+    previous_record = {}
+    previous_emitted = {}
+    missing_positions = {}
+    excluded_until = {}
+    handles = {}
+    paths = []
+    skipped = 0
+    with ExitStack() as stack:
+        if split:
+            Path(output).mkdir(parents=True, exist_ok=True)
+        else:
+            handles[None] = stack.enter_context(open(output, "w"))
+        for rec in vcf:
+            chrom, pos = rec.CHROM, rec.POS
+            if chrom not in lengths or not 1 <= pos <= lengths[chrom]:
+                raise ValueError(f"Record outside declared contig: {chrom}:{pos}")
+            if pos <= previous_record.get(chrom, 0):
+                raise ValueError("Positions must be strictly increasing within each contig")
+            previous_record[chrom] = pos
+            intervals = mask.get(chrom, ([], [])) if mask is not None else None
+            end = min(pos + len(rec.REF) - 1, lengths[chrom])
+            blocked_end = excluded_until.get(chrom, 0)
+            if pos <= blocked_end:
+                if end > blocked_end:
+                    missing_positions[chrom] = missing_positions.get(chrom, 0) + callable_bases_in_range(
+                        intervals, blocked_end, end)
+                    excluded_until[chrom] = end
+                skipped += 1
                 continue
-            chrom, start, end = line.split()[:3]
-            by_chrom[chrom].append((int(start), int(end)))
-    out = {}
-    for chrom, ivs in by_chrom.items():
-        ivs.sort()
-        out[chrom] = ([s for s, _ in ivs], [e for _, e in ivs])
-    return out
-
-
-def callable_bases_in_range(mask_chrom, start_excl, end_incl):
-    """Count callable (masked-in) bases in the 1-based range (start_excl, end_incl]."""
-    if mask_chrom is None:
-        return end_incl - start_excl
-    starts, ends = mask_chrom
-    total = 0
-    # intervals are 0-based [start, end); a 1-based position p is covered if start < p <= end
-    i = bisect.bisect_right(ends, start_excl)
-    while i < len(starts) and starts[i] < end_incl:
-        total += min(ends[i], end_incl) - max(starts[i], start_excl)
-        i += 1
-    return max(total, 0)
-
-
-def is_callable(mask_chrom, pos_1based):
-    if mask_chrom is None:
-        return True
-    starts, ends = mask_chrom
-    i = bisect.bisect_right(starts, pos_1based - 1) - 1
-    return 0 <= i < len(starts) and starts[i] < pos_1based <= ends[i]
+            if not is_callable(intervals, pos):
+                continue
+            bases = [rec.REF] + list(rec.ALT)
+            if any(len(base) != 1 or base not in "ACGT" for base in bases):
+                # Unknown/indel spans are not counted as callable sequence.
+                missing_positions[chrom] = missing_positions.get(chrom, 0) + callable_bases_in_range(
+                    intervals, pos - 1, end)
+                excluded_until[chrom] = end
+                skipped += 1
+                continue
+            choices = []
+            for gt in rec.genotypes:
+                if len(gt) != 3:
+                    raise ValueError(f"Expected diploid genotype at {chrom}:{pos}")
+                a, b, phased = gt
+                if a is None or b is None or min(a, b) < 0:
+                    choices = []
+                    break
+                if max(a, b) >= len(bases):
+                    raise ValueError(f"Invalid allele index at {chrom}:{pos}")
+                pair = bases[a] + bases[b]
+                choices.append([pair] if phased or a == b else [pair, pair[::-1]])
+            if not choices:
+                missing_positions[chrom] = missing_positions.get(chrom, 0) + 1
+                skipped += 1
+                continue
+            configurations = sorted({"".join(pairs) for pairs in itertools.product(*choices)})
+            if len(set(configurations[0])) < 2:
+                continue
+            since = callable_bases_in_range(intervals, previous_emitted.get(chrom, 0), pos)
+            since -= missing_positions.pop(chrom, 0)
+            if since < 1:
+                raise ValueError(f"No callable bases before segregating site {chrom}:{pos}")
+            previous_emitted[chrom] = pos
+            key = chrom if split else None
+            if key not in handles:
+                path = Path(output) / f"contig_{len(paths):04d}.multihetsep.txt"
+                paths.append(str(path))
+                handles[key] = stack.enter_context(open(path, "w"))
+            handles[key].write(f"{chrom}\t{pos}\t{since}\t{','.join(configurations)}\n")
+    if not previous_emitted:
+        raise ValueError("No callable segregating SNPs in selected samples")
+    print(f"[multihetsep] samples={','.join(vcf.samples)}; contigs={len(previous_emitted)}; "
+          f"skipped_uncalled_or_non_SNP={skipped}", file=sys.stderr)
+    return paths, list(vcf.samples)
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("vcf")
-    ap.add_argument("out_multihetsep")
-    ap.add_argument("--max-samples", type=int, default=2,
-                     help="Number of diploid samples (individuals) to include (default: 2, i.e. 4 haplotypes)")
-    ap.add_argument("--mask", default=None,
-                     help="Callability mask BED - restricts callable sites and makes nSitesSincePrevCall exact")
-    args = ap.parse_args()
-
-    mask = load_mask(args.mask) if args.mask else None
-
-    vcf = VCF(args.vcf)
-    samples = vcf.samples[:args.max_samples]
-    vcf = VCF(args.vcf, samples=samples)
-
-    with open(args.out_multihetsep, "w") as out:
-        prev_pos = {}
-        for rec in vcf:
-            mask_chrom = mask.get(rec.CHROM) if mask is not None else None
-            if mask is not None and not is_callable(mask_chrom, rec.POS):
-                continue
-            alleles = []
-            any_variant = False
-            ref, alts = rec.REF, rec.ALT
-            bases = [ref] + list(alts)
-            ok = True
-            for gt in rec.genotypes:
-                a, b = gt[0], gt[1]
-                if a is None or b is None or a < 0 or b < 0 or a >= len(bases) or b >= len(bases):
-                    ok = False
-                    break
-                if a != 0 or b != 0:
-                    any_variant = True
-                alleles.append(bases[a])
-                alleles.append(bases[b])
-            if not ok or not any_variant:
-                continue
-            if any(len(x) != 1 for x in alleles):
-                continue  # skip multi-base indels, multihetsep wants single bases
-            prev = prev_pos.get(rec.CHROM, 0)
-            n_since = callable_bases_in_range(mask_chrom, prev, rec.POS) if mask is not None else rec.POS - prev
-            prev_pos[rec.CHROM] = rec.POS
-            out.write(f"{rec.CHROM}\t{rec.POS}\t{n_since}\t{''.join(alleles)}\n")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("vcf")
+    parser.add_argument("out_multihetsep")
+    parser.add_argument("--max-samples", type=int, default=2)
+    parser.add_argument("--samples", nargs="+")
+    parser.add_argument("--mask")
+    parser.add_argument("--assume-callable", action="store_true")
+    parser.add_argument("--split", action="store_true")
+    args = parser.parse_args()
+    if args.max_samples < 1:
+        parser.error("--max-samples must be positive")
+    selected = args.samples
+    if selected is None:
+        selected = VCF(args.vcf).samples[:args.max_samples]
+    convert(args.vcf, args.out_multihetsep, selected, args.mask, args.assume_callable, args.split)
 
 
 if __name__ == "__main__":

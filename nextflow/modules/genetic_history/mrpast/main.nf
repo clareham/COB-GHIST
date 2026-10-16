@@ -1,13 +1,8 @@
-/*
- * mrpast - disabled integration (bioconda package is available).
- *
- * Requires a demographic model, sample-to-population mapping, dated ARGs,
- * and the documented `mrpast process` / `mrpast solve` workflow.
- * Raw tsinfer output alone is not a substitute for dated ARG inference.
- * See https://mrpast.readthedocs.io/en/latest/workflows/tsinfer.html.
- */
 process MRPAST {
     tag "${meta.challenge}"
+
+    conda "${meta.conda}"
+    cpus { (meta.options?.jobs ?: 1) as int }
 
     input:
     tuple val(meta), path(input_file)
@@ -16,8 +11,16 @@ process MRPAST {
     tuple val(meta), path("${meta.challenge}.mrpast_out"), emit: result
 
     script:
+    def optionsJson = groovy.json.JsonOutput.toJson(meta.options ?: [:])
     """
-    echo "ERROR: mrpast integration is disabled: implement model/population mapping, dated ARG inference, and process/solve before enabling it." >&2
-    exit 1
+    set -euo pipefail
+    outdir="${meta.challenge}.mrpast_out"
+    mkdir -p "\$outdir"
+
+    mrpast_survey.py \\
+        --vcf "${input_file}" \\
+        --challenge "${meta.challenge}" \\
+        --outdir "\$outdir" \\
+        --options '${optionsJson}'
     """
 }

@@ -29,9 +29,15 @@ workflow SWEEP_DETECTION {
                 accessible_bed: chConf.accessible_bed,
                 conda         : toolConf.conda,
                 args          : toolConf.args ?: '',
+                options       : toolConf.options ?: [:],
                 reason        : toolConf.reason ?: '',
             ]
-            byTool[toolName] << tuple(meta, file(inputFile))
+            if (toolName in ['sweepfinder2', 'flexsweep']) {
+                def accessible = file(chConf.accessible_bed, checkIfExists: true)
+                byTool[toolName] << tuple(meta, file(inputFile), accessible)
+            } else {
+                byTool[toolName] << tuple(meta, file(inputFile))
+            }
         }
     }
 

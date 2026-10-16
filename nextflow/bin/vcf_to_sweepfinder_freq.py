@@ -1,45 +1,75 @@
 #!/usr/bin/env python3
-"""Convert a VCF to SweepFinder2's .freq input format.
+"""Convert single-contig biallelic SNPs into SweepFinder2 frequency input.
 
-Columns: position  x  n  folded
-  x      = derived allele count at the site
-  n      = number of called haplotypes (chromosomes) at the site
-  folded = 0 (unfolded) or 1 (folded)
-
-ASSUMPTION: these are tskit/SLiM simulated VCFs, where REF is written as
-the true ancestral allele by convention - so we treat ALT count as the
-derived allele count and emit an *unfolded* spectrum (folded=0). If that
-assumption doesn't hold for a given scenario, rerun with --folded to fall
-back to minor-allele counts instead.
+Use --folded when ancestral alleles are unknown. Unfolded mode requires
+valid INFO/AA values; REF is not assumed ancestral.
 """
+
 import argparse
+import sys
 
 from cyvcf2 import VCF
 
+from callable_regions import is_callable, load_mask
+
+
+def convert(vcf_path, output, folded=False, mask_path=None):
+    mask = load_mask(mask_path) if mask_path else None
+    contig, previous, emitted, skipped = None, 0, 0, 0
+    with open(output, "w") as handle:
+        handle.write("position\tx\tn\tfolded\n")
+        for rec in VCF(vcf_path):
+            if contig is None:
+                contig = rec.CHROM
+            if rec.CHROM != contig:
+                raise ValueError("SweepFinder2 requires a separate scan per contig")
+            if rec.POS <= previous:
+                raise ValueError("SweepFinder2 positions must be strictly increasing")
+            previous = rec.POS
+            intervals = mask.get(contig, ([], [])) if mask is not None else None
+            if not is_callable(intervals, rec.POS):
+                skipped += 1
+                continue
+            if (len(rec.ALT) != 1 or len(rec.REF) != 1 or len(rec.ALT[0]) != 1 or
+                    rec.REF not in "ACGT" or rec.ALT[0] not in "ACGT"):
+                skipped += 1
+                continue
+            alternate, count = 0, 0
+            for gt in rec.genotypes:
+                if len(gt) != 3:
+                    raise ValueError("SweepFinder2 survey expects diploid genotypes")
+                for allele in gt[:2]:
+                    if allele is None or allele < 0:
+                        continue
+                    if allele > 1:
+                        raise ValueError(f"Invalid allele at {rec.CHROM}:{rec.POS}")
+                    count += 1
+                    alternate += allele
+            if count == 0 or alternate in (0, count):
+                continue
+            if folded:
+                derived = min(alternate, count - alternate)
+            else:
+                ancestor = rec.INFO.get("AA")
+                if ancestor not in (rec.REF, rec.ALT[0]):
+                    raise ValueError(f"Missing/invalid INFO/AA at {contig}:{rec.POS}; use --folded")
+                derived = alternate if ancestor == rec.REF else count - alternate
+            handle.write(f"{rec.POS}\t{derived}\t{count}\t{int(folded)}\n")
+            emitted += 1
+    if emitted == 0:
+        raise ValueError("No polymorphic callable SNPs for SweepFinder2")
+    print(f"[SweepFinder2 input] contig={contig}; sites={emitted}; "
+          f"masked_or_non_biallelic_SNP={skipped}; folded={folded}", file=sys.stderr)
+
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("vcf")
-    ap.add_argument("out_freq")
-    ap.add_argument("--folded", action="store_true", help="Emit folded (minor-allele) spectrum instead of unfolded")
-    args = ap.parse_args()
-
-    with open(args.out_freq, "w") as out:
-        out.write("position\tx\tn\tfolded\n")
-        for rec in VCF(args.vcf):
-            ac = 0
-            an = 0
-            for gt in rec.genotypes:
-                for a in gt[:2]:
-                    if a is None or a < 0:
-                        continue
-                    an += 1
-                    if a != 0:
-                        ac += 1
-            if an == 0 or ac == 0 or ac == an:
-                continue  # SweepFinder2 skips invariant sites
-            x = min(ac, an - ac) if args.folded else ac
-            out.write(f"{rec.POS}\t{x}\t{an}\t{1 if args.folded else 0}\n")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("vcf")
+    parser.add_argument("out_freq")
+    parser.add_argument("--folded", action="store_true")
+    parser.add_argument("--mask")
+    args = parser.parse_args()
+    convert(args.vcf, args.out_freq, args.folded, args.mask)
 
 
 if __name__ == "__main__":

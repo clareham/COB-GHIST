@@ -17,11 +17,11 @@ set -euo pipefail
 REF=$1
 BAM=$2
 OUT_PREFIX=$3
-MIN_DEPTH=${4:-3}
-MAX_DEPTH=${5:-30}
+MIN_DEPTH=${4:-1}
+MAX_DEPTH=${5:-10}
 
 samtools faidx "$REF"
-bcftools mpileup -C50 -f "$REF" "$BAM" \
+bcftools mpileup -q20 -Q20 -C50 -f "$REF" "$BAM" \
     | bcftools call -c \
     | vcfutils.pl vcf2fq -d "$MIN_DEPTH" -D "$MAX_DEPTH" \
     > "${OUT_PREFIX}.consensus.fq"

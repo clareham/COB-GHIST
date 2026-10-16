@@ -56,6 +56,7 @@ workflow GENETIC_HISTORY {
                 input_type: chConf.input_type,
                 conda     : toolConf.conda,
                 args      : toolConf.args ?: '',
+                options   : toolConf.options ?: [:],
                 reason    : toolConf.reason ?: '',
             ]
             if (toolName in ['psmc', 'msmc2']) {

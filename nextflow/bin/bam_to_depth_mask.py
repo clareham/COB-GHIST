@@ -1,60 +1,51 @@
 #!/usr/bin/env python3
-"""Build a simple per-window callability mask BED from one BAM's per-base
-depth, for low-coverage data where no mask is otherwise provided.
+"""Emit contiguous callable BED intervals using per-base, quality-filtered BAM depth."""
 
-msmc-tools' own `bamCaller.py` does this alongside VCF generation, but
-it isn't packaged on bioconda/PyPI (same situation as
-generate_multihetsep.py - see bin/vcf_to_multihetsep.py), so this is a
-minimal standalone reimplementation: a window (default 100bp, matching
-PSMC/MSMC2 convention) is "callable" if its mean per-base depth falls
-within [min_depth, max_depth]. Pass the resulting BED to
-bin/vcf_to_multihetsep.py's --mask so MSMC2's `nSitesSincePrevCall`
-counts reflect actual low-coverage callability instead of raw physical
-distance.
-"""
 import argparse
 import subprocess
-import sys
+
+
+def make_mask(bam, output, minimum=2, maximum=20):
+    if minimum < 1 or maximum < minimum:
+        raise ValueError("Depth bounds must satisfy 1 <= min_depth <= max_depth")
+    process = subprocess.Popen(["samtools", "depth", "-a", "-q", "20", "-Q", "20", bam],
+                               stdout=subprocess.PIPE, text=True)
+    intervals = 0
+    with open(output, "w") as handle:
+        chrom, start, end = None, None, None
+        for line in process.stdout:
+            current, position, depth = line.split()
+            position, depth = int(position), int(depth)
+            if minimum <= depth <= maximum:
+                if current == chrom and position - 1 == end:
+                    end = position
+                    continue
+                if chrom is not None:
+                    handle.write(f"{chrom}\t{start}\t{end}\n")
+                    intervals += 1
+                chrom, start, end = current, position - 1, position
+            elif chrom is not None:
+                handle.write(f"{chrom}\t{start}\t{end}\n")
+                intervals += 1
+                chrom, start, end = None, None, None
+        if chrom is not None:
+            handle.write(f"{chrom}\t{start}\t{end}\n")
+            intervals += 1
+    result = process.wait()
+    if result != 0:
+        raise RuntimeError(f"samtools depth exited with status {result}")
+    if intervals == 0:
+        raise ValueError(f"No callable bases at depths {minimum}..{maximum} in {bam}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("bam")
-    ap.add_argument("out_bed")
-    ap.add_argument("--window", type=int, default=100)
-    ap.add_argument("--min-depth", type=int, default=2)
-    ap.add_argument("--max-depth", type=int, default=20)
-    args = ap.parse_args()
-
-    proc = subprocess.Popen(
-        ["samtools", "depth", "-a", args.bam],
-        stdout=subprocess.PIPE, text=True,
-    )
-
-    cur_chrom, win_start, depths = None, None, []
-
-    def flush(out):
-        if cur_chrom is None or not depths:
-            return
-        mean_depth = sum(depths) / len(depths)
-        if args.min_depth <= mean_depth <= args.max_depth:
-            out.write(f"{cur_chrom}\t{win_start}\t{win_start + len(depths)}\n")
-
-    with open(args.out_bed, "w") as out:
-        for line in proc.stdout:
-            chrom, pos, depth = line.rstrip("\n").split("\t")
-            pos, depth = int(pos), int(depth)
-            win = (pos - 1) // args.window
-            this_start = win * args.window
-            if chrom != cur_chrom or this_start != win_start:
-                flush(out)
-                cur_chrom, win_start, depths = chrom, this_start, []
-            depths.append(depth)
-        flush(out)
-
-    ret = proc.wait()
-    if ret != 0:
-        sys.exit(f"samtools depth exited with status {ret}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("bam")
+    parser.add_argument("out_bed")
+    parser.add_argument("--min-depth", type=int, default=2)
+    parser.add_argument("--max-depth", type=int, default=20)
+    args = parser.parse_args()
+    make_mask(args.bam, args.out_bed, args.min_depth, args.max_depth)
 
 
 if __name__ == "__main__":
