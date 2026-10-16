@@ -12,6 +12,10 @@ From the repository root:
 ```bash
 cd nextflow
 
+# First time only: build the missing tsdate Conda package (see below)
+conda install -n base --override-channels -c conda-forge conda-build
+conda build conda-recipes/tsdate --override-channels -c conda-forge
+
 # Run all enabled challenges and tools
 nextflow run . -profile conda
 
@@ -22,6 +26,24 @@ nextflow run . -profile conda -resume
 Defaults: inputs in `../data`, outputs in `results/`. Override paths with
 `--data_dir /path/to/data --outdir /path/to/results`, or set
 `GHIST_DATA_DIR` / `GHIST_OUTDIR`.
+
+### Conda-only mrpast setup
+
+mrpast's ARG workflow needs tsdate, which is not currently published in
+Bioconda or conda-forge. The first-time commands above build the
+[checked-in tsdate recipe](conda-recipes/tsdate/meta.yaml) into Conda's
+local build channel. Use the same Conda installation for the build and
+Nextflow. The recipe checks the source checksum, creates a Conda package,
+and tests its import/CLI; it does not install dependencies through pip.
+Build dependencies and all task dependencies are managed by Conda.
+
+The [mrpast environment](conf/genetic_history/mrpast.yml) uses that local
+package, Python 3.12, and bio2zarr 0.1.6 with Zarr 2. The previous bio2zarr
+0.2.1 pin required Zarr 3, conflicting with tsinfer 0.5.1's Zarr 2 requirement;
+switching package managers alone would not fix it. No pip subsection remains.
+The published dependencies pass a Linux-64 solver dry-run; building/testing
+the local tsdate package and running inference still need verification on
+the analysis machine.
 
 ### Limit the run
 
@@ -105,9 +127,8 @@ BAM preparation uses quality/depth masks and joint calls for MSMC2.
 - **mrpast:** VCF-to-Zarr conversion, per-contig tsinfer/tsdate dated ARGs,
   population maps, and demographic process/solve results under
   `<challenge>.mrpast_out`. Epochs, migration, and rates are survey assumptions.
-  Its pinned environment includes a pip-installed tsdate dependency at
-  environment creation, not during inference; environment resolution and
-  runtime compatibility still need verification on the analysis machine.
+  Its Conda-only environment requires the one-time local tsdate build above.
+  Runtime compatibility still needs verification on the analysis machine.
 
 ### FlexSweep training
 

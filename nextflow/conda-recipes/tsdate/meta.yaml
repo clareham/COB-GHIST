@@ -1,0 +1,46 @@
+{% set version = "0.2.7" %}
+
+package:
+  name: tsdate
+  version: {{ version }}
+
+source:
+  url: https://files.pythonhosted.org/packages/a8/c9/efb3c119adda693064c5076a52d3c336de30a0fc67fd1bfab86ef5a26dd7/tsdate-{{ version }}.tar.gz
+  sha256: 9cc0c09db3d6bc65bd53f3fe2736b2a6614cc7cce0fc83237e5fdf2fec527257
+
+build:
+  number: 0
+  noarch: python
+  script:
+    - {{ PYTHON }} -m build --wheel --no-isolation
+    - {{ PYTHON }} -m installer --prefix="$PREFIX" dist/*.whl
+
+requirements:
+  host:
+    - python >=3.11
+    - python-build
+    - python-installer
+    - setuptools >=42
+    - setuptools_scm
+    - wheel
+  run:
+    - python >=3.11
+    - tskit >=1.0.0
+    - numpy
+    - scipy >=1.13.0
+    - numba >=0.58.1
+    - mpmath
+    - tqdm
+    - appdirs
+
+test:
+  imports:
+    - tsdate
+  commands:
+    - tsdate --help
+
+about:
+  home: https://tskit.dev/tsdate/docs/
+  license: MIT
+  license_file: LICENSE
+  summary: Infer node ages from a tree sequence topology.

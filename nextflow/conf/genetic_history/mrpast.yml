@@ -1,12 +1,14 @@
 name: mrpast-survey
 channels:
+  - local
   - conda-forge
   - bioconda
+  - nodefaults
 dependencies:
   - bioconda::mrpast=0.5
   - conda-forge::tsinfer=0.5.1
-  - bioconda::bio2zarr=0.2.1
-  - conda-forge::python=3.11
-  - pip
-  - pip:
-      - tsdate==0.2.7
+  - bioconda::bio2zarr=0.1.6
+  - conda-forge::python=3.12
+  - conda-forge::zarr>=2.17,<3
+  - conda-forge::numcodecs>=0.6,<0.16
+  - local::tsdate=0.2.7
