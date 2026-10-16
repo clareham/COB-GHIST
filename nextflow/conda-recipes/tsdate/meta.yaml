@@ -9,15 +9,15 @@ source:
   sha256: 9cc0c09db3d6bc65bd53f3fe2736b2a6614cc7cce0fc83237e5fdf2fec527257
 
 build:
-  number: 0
+  number: 1
   noarch: python
   script:
     - {{ PYTHON }} -m build --wheel --no-isolation
-    - {{ PYTHON }} -m installer --prefix="$PREFIX" dist/*.whl
+    - {{ PYTHON }} -m installer --no-compile-bytecode --prefix="$PREFIX" dist/*.whl
 
 requirements:
   host:
-    - python >=3.11
+    - python 3.12.*
     - python-build
     - python-installer
     - setuptools >=42
