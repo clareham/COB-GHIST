@@ -10,7 +10,9 @@ process PSMC {
     conda { meta.conda }
 
     input:
-    tuple val(meta), path(main_file), path(ref_file, stageAs: 'ref_placeholder.*')
+    // VCF challenges: (normalised VCF, VCF again as a harmless ref placeholder,
+    // excluded-sites BED). BAM challenges: (archive, reference FASTA, []).
+    tuple val(meta), path(main_file), path(ref_file, stageAs: 'ref_placeholder.*'), path(excluded_bed)
 
     output:
     tuple val(meta), path("${meta.challenge}.psmc"), emit: result
@@ -21,7 +23,7 @@ process PSMC {
     def prepare
     if (meta.input_type == 'vcf')
         prepare = """
-        vcf_sample_to_psmcfa.py ${main_file} ${meta.challenge}.psmcfa ${meta.options.assume_callable ? '--assume-callable' : ''}
+        vcf_sample_to_psmcfa.py ${main_file} ${meta.challenge}.psmcfa ${meta.options.assume_callable ? '--assume-callable' : ''} ${excluded_bed ? "--exclude ${excluded_bed}" : ''}
         """
     else
         prepare = """

@@ -10,7 +10,9 @@ process MSMC2 {
     conda { meta.conda }
 
     input:
-    tuple val(meta), path(main_file), path(ref_file, stageAs: 'ref_placeholder.*')
+    // VCF challenges: (normalised VCF, VCF again as a harmless ref placeholder,
+    // excluded-sites BED). BAM challenges: (archive, reference FASTA, []).
+    tuple val(meta), path(main_file), path(ref_file, stageAs: 'ref_placeholder.*'), path(excluded_bed)
 
     output:
     tuple val(meta), path("${meta.challenge}.msmc2.final.txt"), emit: result
@@ -24,11 +26,12 @@ process MSMC2 {
     def inputVcf = meta.input_type == 'vcf' ? main_file : "${meta.challenge}.merged.vcf.gz"
     def bamArgs = meta.input_type == 'vcf' ? '' :
         "--mask ${meta.challenge}.mask.bed --population-map ${meta.challenge}.populations.tsv"
+    def excludeArgs = excluded_bed ? "--exclude ${excluded_bed}" : ''
     """
     cat > msmc_options.json <<'JSON'
     ${optionsJson}
     JSON
     ${prepare}
-    msmc_survey.py ${inputVcf} ${meta.challenge} msmc_options.json ${bamArgs}
+    msmc_survey.py ${inputVcf} ${meta.challenge} msmc_options.json ${bamArgs} ${excludeArgs}
     """
 }

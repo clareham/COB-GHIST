@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 
-from callable_regions import callable_bases_in_range, load_mask
+from callable_regions import callable_bases_in_range, load_mask, resolve_mask, subtract_mask
 from msmc_survey import combine, read_rates
 from vcf_sample_to_psmcfa import convert as psmc
 from vcf_to_multihetsep import convert as multihetsep
@@ -95,6 +95,34 @@ class ConverterTests(unittest.TestCase):
         mask = self.write("mask.bed", "2\t0\t300\n")
         with self.assertRaisesRegex(ValueError, "No callable segregating"):
             multihetsep(path, self.directory / "output", mask_path=mask)
+
+    def test_subtract_mask_removes_excluded_sites(self):
+        mask = {"1": ([0, 100], [50, 200])}
+        excluded = {"1": ([10, 49, 150], [20, 60, 151]), "2": ([0], [5])}
+        self.assertEqual(subtract_mask(mask, excluded),
+                         {"1": ([0, 20, 100, 151], [10, 49, 150, 200])})
+
+    def test_resolve_mask_assumed_callable_minus_exclusions(self):
+        excluded = self.write("excluded.bed", "1\t149\t150\n")
+        self.assertIsNone(resolve_mask({"1": 300}, assume_callable=True))
+        self.assertEqual(resolve_mask({"1": 300}, exclude_path=excluded, assume_callable=True),
+                         {"1": ([0, 150], [149, 300])})
+        empty = self.write("empty.bed", "")
+        self.assertIsNone(resolve_mask({"1": 300}, exclude_path=empty, assume_callable=True))
+
+    def test_psmc_excluded_site_masks_window(self):
+        path = self.vcf("1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t0|1\t0|0\n")
+        excluded = self.write("excluded.bed", "1\t249\t250\n")
+        output = self.directory / "output.psmcfa"
+        psmc(path, output, assume_callable=True, exclude_path=excluded)
+        self.assertEqual(output.read_text(), ">1\nTKN\n")
+
+    def test_multihetsep_excluded_site_reduces_distance(self):
+        path = self.vcf("1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t0|1\t0|0\n")
+        excluded = self.write("excluded.bed", "1\t99\t100\n")
+        output = self.directory / "output.txt"
+        multihetsep(path, output, assume_callable=True, exclude_path=excluded)
+        self.assertEqual(output.read_text(), "1\t150\t149\tAGAA\n")
 
     def test_overlapping_mask_intervals_are_not_double_counted(self):
         mask = load_mask(self.write("mask.bed", "1\t0\t20\n1\t10\t30\n1\t40\t50\n"))

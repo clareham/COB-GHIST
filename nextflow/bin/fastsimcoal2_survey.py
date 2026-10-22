@@ -2,9 +2,13 @@
 """Prepare a challenge-matched fastsimcoal2 SFS and demographic model."""
 
 import argparse
+import gzip
+import io
 import json
 import math
 import re
+import shutil
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 
@@ -20,10 +24,25 @@ def read_options(value):
         fail(f"invalid options JSON: {exc}")
 
 
+def open_text(path):
+    """Open a plain or (b)gzip-compressed text file for reading.
+
+    Decompression is delegated to an external `gzip` process when available:
+    it runs in parallel with this parser and is several times faster than
+    Python's gzip module on the multi-GB challenge VCFs.
+    """
+    if not str(path).endswith(".gz"):
+        return open(path, encoding="utf-8")
+    if shutil.which("gzip") is None:
+        return gzip.open(path, "rt", encoding="utf-8")
+    process = subprocess.Popen(["gzip", "-cd", str(path)], stdout=subprocess.PIPE)
+    return io.TextIOWrapper(process.stdout, encoding="utf-8")
+
+
 def parse_vcf_header(path, prefixes):
     contigs = {}
     samples = []
-    with open(path, encoding="utf-8") as handle:
+    with open_text(path) as handle:
         for line in handle:
             if line.startswith("##contig=<"):
                 attrs = dict(
@@ -62,7 +81,7 @@ def parse_vcf_header(path, prefixes):
 def iter_vcf_records(path):
     """Yield per-position record groups; stacked records share CHROM/POS."""
     group = []
-    with open(path, encoding="utf-8") as handle:
+    with open_text(path) as handle:
         for line in handle:
             if line.startswith("#"):
                 continue
@@ -75,10 +94,24 @@ def iter_vcf_records(path):
         yield group
 
 
-def load_exclusions(path, contigs):
+def load_exclusions(paths, contigs):
+    """Load and merge zero or more exclusion BEDs into {contig: [(start, end), ...]}."""
     intervals = defaultdict(list)
-    if not path:
-        return intervals
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    for path in paths or []:
+        _collect_exclusions(path, contigs, intervals)
+    merged = defaultdict(list)
+    for chrom, spans in intervals.items():
+        for start, end in sorted(spans):
+            if merged[chrom] and start <= merged[chrom][-1][1]:
+                merged[chrom][-1] = (merged[chrom][-1][0], max(end, merged[chrom][-1][1]))
+            else:
+                merged[chrom].append((start, end))
+    return merged
+
+
+def _collect_exclusions(path, contigs, intervals):
     bed = Path(path)
     if not bed.is_file():
         fail(f"configured exclusion BED does not exist: {bed}")
@@ -100,14 +133,6 @@ def load_exclusions(path, contigs):
         start, end = min(start, contigs[chrom]), min(end, contigs[chrom])
         if end > start:
             intervals[chrom].append((start, end))
-    merged = defaultdict(list)
-    for chrom, spans in intervals.items():
-        for start, end in sorted(spans):
-            if merged[chrom] and start <= merged[chrom][-1][1]:
-                merged[chrom][-1] = (merged[chrom][-1][0], max(end, merged[chrom][-1][1]))
-            else:
-                merged[chrom].append((start, end))
-    return merged
 
 
 def in_intervals(position0, spans):
@@ -282,7 +307,8 @@ def prepare(args):
         fail("only symmetric two-population migration is implemented")
     if len(groups) == 2 and options.get("ancestral_size_rule", "population_0") != "population_0":
         fail("the fsc split template currently retains population 0 size as ancestral size")
-    exclusions = load_exclusions(options.get("exclude_bed"), contigs)
+    exclusion_beds = [path for path in (options.get("exclude_bed"), args.exclude_bed) if path]
+    exclusions = load_exclusions(exclusion_beds, contigs)
     if options.get("assume_callable") is not True and not options.get("exclude_bed"):
         fail("set assume_callable=true or configure an exclusion BED")
     callable_length = sum(contigs.values()) - excluded_length(contigs, exclusions)
@@ -357,6 +383,7 @@ def prepare(args):
         "retained_biallelic_snps": callable_variant_records,
         "rejected_sites": rejected_sites,
         "excluded_bed": options.get("exclude_bed"),
+        "excluded_sites_bed": args.exclude_bed,
         "mutation_rate_per_generation_per_bp": mutation_rate,
         "assumptions": {
             "ploidy": 2,
@@ -379,6 +406,8 @@ def main():
                         choices=("bottleneck", "growth", "secondary_contact", "split_migration"))
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--options", default="{}")
+    parser.add_argument("--exclude-bed", default=None,
+                        help="additional BED of positions removed from the VCF (normalise_vcf.sh output)")
     args = parser.parse_args()
     prepare(args)
 

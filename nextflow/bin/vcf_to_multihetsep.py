@@ -15,10 +15,11 @@ from pathlib import Path
 from cyvcf2 import VCF
 
 from callable_regions import (callable_bases_in_range, contig_lengths, is_callable, iter_positions,
-                              load_mask)
+                              resolve_mask)
 
 
-def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=False, split=False):
+def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=False, split=False,
+            exclude_path=None):
     if mask_path is None and not assume_callable:
         raise ValueError("Provide a callability BED or explicitly choose --assume-callable")
     vcf = VCF(vcf_path)
@@ -27,7 +28,7 @@ def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=Fals
         raise ValueError("Requested samples must be a nonempty, unique subset of VCF samples")
     vcf.set_samples(selected)
     lengths = contig_lengths(vcf)
-    mask = load_mask(mask_path) if mask_path else None
+    mask = resolve_mask(lengths, mask_path, exclude_path, assume_callable)
     previous_emitted = {}
     missing_positions = {}
     excluded_until = {}
@@ -111,13 +112,15 @@ def main():
     parser.add_argument("--mask")
     parser.add_argument("--assume-callable", action="store_true")
     parser.add_argument("--split", action="store_true")
+    parser.add_argument("--exclude", help="BED of positions to treat as uncallable (e.g. normalise_vcf.sh output)")
     args = parser.parse_args()
     if args.max_samples < 1:
         parser.error("--max-samples must be positive")
     selected = args.samples
     if selected is None:
         selected = VCF(args.vcf).samples[:args.max_samples]
-    convert(args.vcf, args.out_multihetsep, selected, args.mask, args.assume_callable, args.split)
+    convert(args.vcf, args.out_multihetsep, selected, args.mask, args.assume_callable, args.split,
+            args.exclude)
 
 
 if __name__ == "__main__":

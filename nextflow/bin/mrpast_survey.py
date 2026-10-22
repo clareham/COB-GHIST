@@ -2,8 +2,11 @@
 """Prepare phased-per-contig VCFs and a challenge-specific mrpast model."""
 
 import argparse
+import gzip
+import io
 import json
 import math
+import shutil
 import subprocess
 import sys
 from collections import defaultdict
@@ -56,6 +59,21 @@ def load_exclusions(path, contigs):
     return merged
 
 
+def open_text(path):
+    """Open a plain or (b)gzip-compressed text file for reading.
+
+    Decompression is delegated to an external `gzip` process when available:
+    it runs in parallel with this parser and is several times faster than
+    Python's gzip module on the multi-GB challenge VCFs.
+    """
+    if not str(path).endswith(".gz"):
+        return open(path, encoding="utf-8")
+    if shutil.which("gzip") is None:
+        return gzip.open(path, "rt", encoding="utf-8")
+    process = subprocess.Popen(["gzip", "-cd", str(path)], stdout=subprocess.PIPE)
+    return io.TextIOWrapper(process.stdout, encoding="utf-8")
+
+
 def inside_mask(position0, spans):
     return any(start <= position0 < end for start, end in spans)
 
@@ -64,7 +82,7 @@ def parse_header(vcf_path, prefixes):
     contigs = {}
     header = []
     samples = []
-    with open(vcf_path, encoding="utf-8") as handle:
+    with open_text(vcf_path) as handle:
         for line in handle:
             if line.startswith("#CHROM"):
                 samples = line.rstrip("\n").split("\t")[9:]
@@ -165,7 +183,7 @@ def emit_contig_vcfs(vcf_path, outdir, contigs, header, samples, exclusions):
             record_counts[chrom] += 1
 
         group = []
-        with open(vcf_path, encoding="utf-8") as source:
+        with open_text(vcf_path) as source:
             for line in source:
                 if line.startswith("#"):
                     continue

@@ -59,7 +59,7 @@ def combine(cross_path, first_path, second_path, output, rccr_output, mutation_r
             rccr.write(f"{index}\t{left / mutation_rate}\t{right / mutation_rate}\t{2 * rate / denominator}\n")
 
 
-def run(vcf_path, prefix, options, mask=None, population_map=None):
+def run(vcf_path, prefix, options, mask=None, population_map=None, exclude=None):
     threads = options["threads"]
     mutation_rate = options["mutation_rate"]
     if (not isinstance(threads, int) or threads < 1 or
@@ -99,7 +99,7 @@ def run(vcf_path, prefix, options, mask=None, population_map=None):
     work = Path(f"{prefix}.msmc2.run")
     work.mkdir()
     inputs, ordered = convert(vcf_path, work / "inputs", selected, mask,
-                              options.get("assume_callable", False), split=True)
+                              options.get("assume_callable", False), split=True, exclude_path=exclude)
     groups = [[hap for i, sample in enumerate(ordered) if mapping[sample] == population
                for hap in (2 * i, 2 * i + 1)] for population in populations]
     extra = shlex.split(options.get("extra_args", ""))
@@ -126,7 +126,7 @@ def run(vcf_path, prefix, options, mask=None, population_map=None):
         shutil.copyfile(work / "within1.final.txt", final)
     with open(work / "assumptions.json", "w") as handle:
         json.dump({"options": options, "sample_populations": {sample: mapping[sample] for sample in ordered},
-                   "haplotype_groups": groups, "mask": mask,
+                   "haplotype_groups": groups, "mask": mask, "excluded_sites": exclude,
                    "rccr_combination": "time-weighted within rates on cross-run intervals"}, handle, indent=2)
 
 
@@ -137,10 +137,11 @@ def main():
     parser.add_argument("options_json")
     parser.add_argument("--mask")
     parser.add_argument("--population-map")
+    parser.add_argument("--exclude", help="BED of positions to treat as uncallable")
     args = parser.parse_args()
     with open(args.options_json) as handle:
         options = json.load(handle)
-    run(args.vcf, args.prefix, options, args.mask, args.population_map)
+    run(args.vcf, args.prefix, options, args.mask, args.population_map, args.exclude)
 
 
 if __name__ == "__main__":

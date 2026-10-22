@@ -12,10 +12,11 @@ import sys
 
 from cyvcf2 import VCF
 
-from callable_regions import callable_bases_in_range, contig_lengths, iter_positions, load_mask
+from callable_regions import callable_bases_in_range, contig_lengths, iter_positions, resolve_mask
 
 
-def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_callable=False):
+def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_callable=False,
+            exclude_path=None):
     if window <= 0:
         raise ValueError("Window size must be positive")
     if mask_path is None and not assume_callable:
@@ -28,7 +29,7 @@ def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_ca
         raise ValueError(f"Sample not in VCF: {sample}")
     vcf.set_samples([sample])
     lengths = contig_lengths(vcf)
-    mask = load_mask(mask_path) if mask_path else None
+    mask = resolve_mask(lengths, mask_path, exclude_path, assume_callable)
     sequences = {}
     missing = {}
     for chrom, length in lengths.items():
@@ -85,7 +86,8 @@ def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_ca
                 handle.write(sequence[index:index + 60].decode("ascii") + "\n")
     print(f"[psmc input] sample={sample}; heterozygous_windows={heterozygous}; "
           f"stacked_positions_masked={stacked}; "
-          f"callability={'BED' if mask_path else 'assumed across declared contigs'}", file=sys.stderr)
+          f"callability={'BED' if mask_path else 'assumed across declared contigs'}"
+          f"{' minus excluded sites' if exclude_path else ''}", file=sys.stderr)
 
 
 def main():
@@ -96,8 +98,10 @@ def main():
     parser.add_argument("--window", type=int, default=100)
     parser.add_argument("--mask")
     parser.add_argument("--assume-callable", action="store_true")
+    parser.add_argument("--exclude", help="BED of positions to treat as uncallable (e.g. normalise_vcf.sh output)")
     args = parser.parse_args()
-    convert(args.vcf, args.out_psmcfa, args.sample, args.window, args.mask, args.assume_callable)
+    convert(args.vcf, args.out_psmcfa, args.sample, args.window, args.mask, args.assume_callable,
+            args.exclude)
 
 
 if __name__ == "__main__":

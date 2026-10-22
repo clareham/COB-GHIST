@@ -4,7 +4,7 @@ import bisect
 from collections import defaultdict
 
 
-def load_mask(path):
+def load_mask(path, allow_empty=False):
     by_chrom = defaultdict(list)
     with open(path) as handle:
         for number, line in enumerate(handle, 1):
@@ -26,9 +26,54 @@ def load_mask(path):
             else:
                 merged.append((start, end))
         result[chrom] = ([start for start, _ in merged], [end for _, end in merged])
-    if not result:
+    if not result and not allow_empty:
         raise ValueError(f"{path}: empty callability mask")
     return result
+
+
+def full_mask(lengths):
+    """Callable mask covering every declared contig end to end."""
+    return {chrom: ([0], [length]) for chrom, length in lengths.items()}
+
+
+def subtract_mask(mask, excluded):
+    """Remove `excluded` intervals (same {chrom: (starts, ends)} shape) from `mask`."""
+    result = {}
+    for chrom, (starts, ends) in mask.items():
+        cut_starts, cut_ends = excluded.get(chrom, ([], []))
+        kept = []
+        index = 0
+        for start, end in zip(starts, ends):
+            cursor = start
+            while index < len(cut_starts) and cut_ends[index] <= cursor:
+                index += 1
+            probe = index
+            while probe < len(cut_starts) and cut_starts[probe] < end:
+                if cut_starts[probe] > cursor:
+                    kept.append((cursor, cut_starts[probe]))
+                cursor = max(cursor, cut_ends[probe])
+                probe += 1
+            if cursor < end:
+                kept.append((cursor, end))
+        if kept:
+            result[chrom] = ([s for s, _ in kept], [e for _, e in kept])
+    return result
+
+
+def resolve_mask(lengths, mask_path=None, exclude_path=None, assume_callable=False):
+    """Build the callable mask from an optional BED, assumed-callable contigs and exclusions.
+
+    Returns None when everything is callable and nothing is excluded, so
+    callers can keep their fast "no mask" path.
+    """
+    if mask_path is None and not assume_callable:
+        raise ValueError("Provide a callability BED or explicitly choose --assume-callable")
+    mask = load_mask(mask_path) if mask_path else None
+    if exclude_path:
+        excluded = load_mask(exclude_path, allow_empty=True)
+        if excluded:
+            mask = subtract_mask(mask if mask is not None else full_mask(lengths), excluded)
+    return mask
 
 
 def callable_bases_in_range(intervals, start_excl, end_incl):

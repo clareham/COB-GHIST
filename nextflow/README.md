@@ -72,15 +72,30 @@ execution, previously meant the first failure hid every other result).
 Check the console summary, `results/execution_report.html`, or
 `nextflow log <run name> -f status,name,exit,workdir` for failed tasks.
 
-### Input quirks handled by the converters
+### VCF normalisation stage
 
 The simulated GHIST VCFs are not "clean" biallelic call sets:
-`bottleneck.testing.vcf` stacks several mutations at one coordinate as
-separate records (7,678 positions), and the other genetic-history VCFs
-contain triallelic sites (`ALT=C,G`, genotypes with allele index 2). All
-`bin/` converters treat stacked and multiallelic positions as non-biallelic
-sites: they are excluded from spectra/scans and removed from callable
-sequence (PSMC masks the affected window). They used to abort the task.
+`bottleneck.testing.vcf` carries several distinct simulated sites collapsed
+onto one coordinate as separate records (7,678 positions, often with
+different REF bases), the other genetic-history VCFs contain triallelic
+sites (`ALT=C,G`, genotypes with allele index 2; a handful also occur in the
+sweep and relatedness VCFs), and the `##INFO=<ID=AA ...` header line is
+unterminated. These broke every tool on `bottleneck`, fastsimcoal2/mrpast on
+the other genetic-history challenges, and ADMIXTURE on relatedness2/4
+(`plink2 --make-bed` rejects multiallelic variants).
+
+Every VCF challenge therefore first passes through the shared
+[NORMALISE_VCF](modules/common/normalise_vcf/main.nf) process
+([bin/normalise_vcf.sh](bin/normalise_vcf.sh), bcftools): the header is
+repaired, every position that is not exactly one biallelic SNP record is
+dropped, and the result is bgzipped/indexed. The dropped positions are
+emitted as `<challenge>.excluded_sites.bed` and passed to PSMC, MSMC2 and
+fastsimcoal2 so they are removed from callable sequence instead of being
+counted as monomorphic (PSMC masks the affected 100 bp window). The BED and
+a `<challenge>.normalise.tsv` summary are published under
+`results/<category>/<challenge>/normalise_vcf/`; the normalised VCF stays in
+the work directory. The `bin/` converters additionally guard against stacked
+and multiallelic records themselves, so they also behave on raw VCFs.
 `INFO/AA` equals `REF` at every site of the genetic-history VCFs, so the
 configured `assume_ref_ancestral` option is exact for this data.
 
@@ -99,6 +114,7 @@ testing-file naming guard.
 | [conf/base.config](conf/base.config) | Shared process resources and reporting |
 | `conf/<category>/<challenge>.config` | Challenge inputs, tool enablement, Conda packages, arguments |
 | `workflows/<category>.nf` | Routes enabled challenge/tool pairs |
+| `modules/common/normalise_vcf/main.nf` | Shared biallelic-SNP normalisation of every VCF challenge |
 | `modules/<category>/<tool>/main.nf` | Shared process implementation per tool |
 
 Tool status is descriptive; `enabled` controls execution:

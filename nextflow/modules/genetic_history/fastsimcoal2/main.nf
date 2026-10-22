@@ -8,7 +8,7 @@ process FASTSIMCOAL2 {
     time '8.h'
 
     input:
-    tuple val(meta), path(input_file)
+    tuple val(meta), path(input_file), path(excluded_bed)
 
     output:
     tuple val(meta), path("${meta.challenge}.fastsimcoal2_out"), emit: result
@@ -25,7 +25,8 @@ process FASTSIMCOAL2 {
         --vcf "${input_file}" \\
         --challenge "${meta.challenge}" \\
         --outdir "\$outdir" \\
-        --options '${optionsJson}'
+        --options '${optionsJson}' \\
+        --exclude-bed "${excluded_bed}"
     cd "\$outdir"
 
     # fsc27093 is the executable shipped by Bioconda's fastsimcoal2=27093.
