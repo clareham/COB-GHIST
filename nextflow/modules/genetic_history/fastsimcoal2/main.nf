@@ -3,6 +3,9 @@ process FASTSIMCOAL2 {
 
     conda "${meta.conda}"
     cpus { (meta.options?.threads ?: 1) as int }
+    // 100k simulations x 40 ECM cycles on a 100+ haplotype SFS, plus the
+    // pure-Python SFS build over up to 5M records, exceeds the 2 h default.
+    time '8.h'
 
     input:
     tuple val(meta), path(input_file)
@@ -26,9 +29,12 @@ process FASTSIMCOAL2 {
     cd "\$outdir"
 
     # fsc27093 is the executable shipped by Bioconda's fastsimcoal2=27093.
+    # -m reads the folded (minor-allele) *_MAFpop0.obs spectrum and -d the
+    # unfolded *_jointDAFpop1_0.obs spectrum; --foldedSFS is a simulation
+    # output option and does not select the observed SFS type.
     if [[ "${meta.challenge}" == "bottleneck" || "${meta.challenge}" == "growth" ]]; then
         fsc27093 -t "${meta.challenge}.tpl" -e "${meta.challenge}.est" \\
-            -n ${simulations} -M -L ${cycles} --foldedSFS -q -c ${task.cpus}
+            -n ${simulations} -M -L ${cycles} -m -q -c ${task.cpus}
     else
         fsc27093 -t "${meta.challenge}.tpl" -e "${meta.challenge}.est" \\
             -n ${simulations} -M -L ${cycles} -d -q -c ${task.cpus}

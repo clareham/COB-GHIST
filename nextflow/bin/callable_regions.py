@@ -50,6 +50,30 @@ def is_callable(intervals, pos):
     return callable_bases_in_range(intervals, pos - 1, pos) == 1
 
 
+def iter_positions(records, chrom_of=lambda rec: rec.CHROM, pos_of=lambda rec: rec.POS):
+    """Group consecutive records sharing CHROM/POS.
+
+    Simulated GHIST VCFs stack multiple mutations at one coordinate as
+    separate records; callers treat such groups like multiallelic sites.
+    Ordering within each contig is validated here so that callers only
+    have to handle complete per-position groups.
+    """
+    group = []
+    previous = {}
+    for rec in records:
+        chrom, pos = chrom_of(rec), pos_of(rec)
+        if group and (chrom != chrom_of(group[0]) or pos != pos_of(group[0])):
+            yield group
+            group = []
+        if not group:
+            if pos <= previous.get(chrom, 0):
+                raise ValueError(f"VCF positions must be sorted within each contig: {chrom}:{pos}")
+            previous[chrom] = pos
+        group.append(rec)
+    if group:
+        yield group
+
+
 def contig_lengths(vcf):
     lengths = dict(zip(vcf.seqnames, vcf.seqlens))
     if not lengths or any(length is None or length <= 0 for length in lengths.values()):

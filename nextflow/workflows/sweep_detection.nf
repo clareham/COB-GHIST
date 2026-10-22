@@ -41,12 +41,12 @@ workflow SWEEP_DETECTION {
         }
     }
 
-    SWEEPFINDER2(Channel.fromList(byTool['sweepfinder2']))
-    FLEXSWEEP(Channel.fromList(byTool['flexsweep']))
-    SWEED(Channel.fromList(byTool['sweed']))
-    OMEGAPLUS(Channel.fromList(byTool['omegaplus']))
-    RAISD(Channel.fromList(byTool['raisd']))
-    TIMESWEEPER(Channel.fromList(byTool['timesweeper']))
+    SWEEPFINDER2(channel.fromList(byTool['sweepfinder2']))
+    FLEXSWEEP(channel.fromList(byTool['flexsweep']))
+    SWEED(channel.fromList(byTool['sweed']))
+    OMEGAPLUS(channel.fromList(byTool['omegaplus']))
+    RAISD(channel.fromList(byTool['raisd']))
+    TIMESWEEPER(channel.fromList(byTool['timesweeper']))
 
     emit:
     sweepfinder2 = SWEEPFINDER2.out.result

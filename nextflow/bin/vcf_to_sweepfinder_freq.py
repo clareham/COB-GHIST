@@ -10,27 +10,25 @@ import sys
 
 from cyvcf2 import VCF
 
-from callable_regions import is_callable, load_mask
+from callable_regions import is_callable, iter_positions, load_mask
 
 
 def convert(vcf_path, output, folded=False, mask_path=None):
     mask = load_mask(mask_path) if mask_path else None
-    contig, previous, emitted, skipped = None, 0, 0, 0
+    contig, emitted, skipped = None, 0, 0
     with open(output, "w") as handle:
         handle.write("position\tx\tn\tfolded\n")
-        for rec in VCF(vcf_path):
+        for records in iter_positions(VCF(vcf_path)):
+            rec = records[0]
             if contig is None:
                 contig = rec.CHROM
             if rec.CHROM != contig:
                 raise ValueError("SweepFinder2 requires a separate scan per contig")
-            if rec.POS <= previous:
-                raise ValueError("SweepFinder2 positions must be strictly increasing")
-            previous = rec.POS
             intervals = mask.get(contig, ([], [])) if mask is not None else None
             if not is_callable(intervals, rec.POS):
                 skipped += 1
                 continue
-            if (len(rec.ALT) != 1 or len(rec.REF) != 1 or len(rec.ALT[0]) != 1 or
+            if (len(records) > 1 or len(rec.ALT) != 1 or len(rec.REF) != 1 or len(rec.ALT[0]) != 1 or
                     rec.REF not in "ACGT" or rec.ALT[0] not in "ACGT"):
                 skipped += 1
                 continue

@@ -60,10 +60,19 @@ def parse_vcf_header(path, prefixes):
 
 
 def iter_vcf_records(path):
+    """Yield per-position record groups; stacked records share CHROM/POS."""
+    group = []
     with open(path, encoding="utf-8") as handle:
         for line in handle:
-            if not line.startswith("#"):
-                yield line.rstrip("\n").split("\t")
+            if line.startswith("#"):
+                continue
+            record = line.rstrip("\n").split("\t")
+            if group and record[:2] != group[0][:2]:
+                yield group
+                group = []
+            group.append(record)
+    if group:
+        yield group
 
 
 def load_exclusions(path, contigs):
@@ -121,9 +130,9 @@ def get_alleles(record, samples):
         fail(f"invalid VCF position {pos!r} on {chrom}")
     if position < 1 or position > samples["contigs"][chrom]:
         fail(f"VCF position outside declared contig bounds: {chrom}:{position}")
-    if "," in alt:
-        fail(f"multiallelic site is unsupported: {chrom}:{position}")
-    if len(ref) != 1 or len(alt) != 1 or alt == ".":
+    # Multiallelic sites cannot enter a biallelic SFS; the caller drops them
+    # from the callable length like any other rejected record.
+    if "," in alt or len(ref) != 1 or len(alt) != 1 or alt == ".":
         return chrom, position, None, filt
     fmt_fields = fmt.split(":")
     if "GT" not in fmt_fields:
@@ -158,33 +167,37 @@ def render_fsc_model(challenge, hap_counts, options, mutation_rate):
         "// Priors are survey search ranges; population sizes are diploid individuals.",
         "[PARAMETERS]",
     ]
-    tpl = ["// fastsimcoal2 survey model", "//Number of population samples (demes)", str(pop_count)]
+    # fsc reads the template as alternating "//comment" + data blocks, so
+    # keep exactly one comment line ahead of every block (see the fsc27
+    # manual's .tpl examples).
+    tpl = ["//Number of population samples (demes)", str(pop_count)]
     if pop_count == 1:
-        tpl += ["NCUR_HAP", "//Sample sizes", str(hap_counts[0]),
+        tpl += ["//Population effective sizes (number of genes)", "HAPSIZE",
+                "//Sample sizes", str(hap_counts[0]),
                 "//Growth rates: negative growth implies population expansion", "0",
                 "//Number of migration matrices", "0",
                 "//historical event: time, source, sink, migrants, new size, new growth rate, migr. matrix"]
         if challenge == "bottleneck":
             fraction_bounds = options.get("fraction_bounds", [0.01, 1.0])
-            tpl += ["1 historical event", "T 0 0 0 INVNU 0 0"]
+            tpl += ["1 historical event", "TCHANGE 0 0 0 RESIZE 0 0"]
             common += [
-                f"1 NCUR unif {size_bounds[0]} {size_bounds[1]} output bounded",
-                f"1 NU unif {fraction_bounds[0]} {fraction_bounds[1]} output bounded",
-                f"1 T unif {time_bounds[0]} {time_bounds[1]} output bounded",
+                f"1 NDIP unif {size_bounds[0]} {size_bounds[1]} output bounded",
+                f"1 FRAC unif {fraction_bounds[0]} {fraction_bounds[1]} output bounded",
+                f"1 TCHANGE unif {time_bounds[0]} {time_bounds[1]} output bounded",
                 "[COMPLEX PARAMETERS]",
-                "0 NCUR_HAP = 2*NCUR hide",
-                "0 INVNU = 1/NU hide",
+                "0 HAPSIZE = 2*NDIP hide",
+                "0 RESIZE = 1/FRAC hide",
             ]
         elif challenge == "growth":
             scale_bounds = options.get("growth_scale_bounds", [1.01, 100.0])
-            tpl += ["1 historical event", "T 0 0 0 INVNU 0 0"]
+            tpl += ["1 historical event", "TCHANGE 0 0 0 RESIZE 0 0"]
             common += [
-                f"1 NCUR unif {size_bounds[0]} {size_bounds[1]} output bounded",
-                f"1 NU unif {scale_bounds[0]} {scale_bounds[1]} output bounded",
-                f"1 T unif {time_bounds[0]} {time_bounds[1]} output bounded",
+                f"1 NDIP unif {size_bounds[0]} {size_bounds[1]} output bounded",
+                f"1 FRAC unif {scale_bounds[0]} {scale_bounds[1]} output bounded",
+                f"1 TCHANGE unif {time_bounds[0]} {time_bounds[1]} output bounded",
                 "[COMPLEX PARAMETERS]",
-                "0 NCUR_HAP = 2*NCUR hide",
-                "0 INVNU = 1/NU hide",
+                "0 HAPSIZE = 2*NDIP hide",
+                "0 RESIZE = 1/FRAC hide",
             ]
         else:
             fail(f"no single-population model is defined for {challenge!r}")
@@ -192,7 +205,8 @@ def render_fsc_model(challenge, hap_counts, options, mutation_rate):
         if len(migration_bounds) != 2 or migration_bounds[0] <= 0 or migration_bounds[1] <= migration_bounds[0]:
             fail("migration_rate_bounds must be two increasing positive values")
         tpl += [
-            "N1_HAP", "N2_HAP", "//Sample sizes", str(hap_counts[0]), str(hap_counts[1]),
+            "//Population effective sizes (number of genes)", "HAPA", "HAPB",
+            "//Sample sizes", str(hap_counts[0]), str(hap_counts[1]),
             "//Growth rates: negative growth implies population expansion", "0", "0",
         ]
         if challenge == "secondary_contact":
@@ -203,42 +217,44 @@ def render_fsc_model(challenge, hap_counts, options, mutation_rate):
             tpl += [
                 "//Number of migration matrices", "2",
                 "//Migration after contact, symmetric in both directions",
-                "0 M", "M 0",
+                "0 MIG", "MIG 0",
                 "//Migration matrix during isolation",
                 "0 0", "0 0",
                 "//historical event: time, source, sink, migrants, new size, new growth rate, migr. matrix",
                 "2 historical event",
-                "T2 0 0 0 1 0 1",
-                "T1 1 0 1 1 0 1",
+                "TCONTACT 0 0 0 1 0 1",
+                "TSPLIT 1 0 1 1 0 1",
             ]
             common += [
-                f"1 N1 unif {size_bounds[0]} {size_bounds[1]} output bounded",
-                f"1 N2 unif {size_bounds[0]} {size_bounds[1]} output bounded",
-                f"1 T1 unif {time_bounds[0]} {time_bounds[1]} output bounded",
-                f"1 R unif {ratio_bounds[0]} {ratio_bounds[1]} output bounded",
-                f"1 M unif {migration_bounds[0]} {migration_bounds[1]} output bounded",
+                f"1 NPOPA unif {size_bounds[0]} {size_bounds[1]} output bounded",
+                f"1 NPOPB unif {size_bounds[0]} {size_bounds[1]} output bounded",
+                f"1 TSPLIT unif {time_bounds[0]} {time_bounds[1]} output bounded",
+                f"1 RATIO unif {ratio_bounds[0]} {ratio_bounds[1]} output bounded",
+                f"1 MIG unif {migration_bounds[0]} {migration_bounds[1]} output bounded",
                 "[COMPLEX PARAMETERS]",
-                "0 N1_HAP = 2*N1 hide",
-                "0 N2_HAP = 2*N2 hide",
-                "0 T2 = T1*R output",
+                "0 HAPA = 2*NPOPA hide",
+                "0 HAPB = 2*NPOPB hide",
+                "0 TCONTACT = TSPLIT*RATIO output",
             ]
         elif challenge == "split_migration":
             tpl += [
-                "//Number of migration matrices", "1",
+                "//Number of migration matrices", "2",
                 "//Symmetric migration until the split",
-                "0 M", "M 0",
+                "0 MIG", "MIG 0",
+                "//No migration in the ancestral population",
+                "0 0", "0 0",
                 "//historical event: time, source, sink, migrants, new size, new growth rate, migr. matrix",
                 "1 historical event",
-                "T1 1 0 1 1 0 0",
+                "TSPLIT 1 0 1 1 0 1",
             ]
             common += [
-                f"1 N1 unif {size_bounds[0]} {size_bounds[1]} output bounded",
-                f"1 N2 unif {size_bounds[0]} {size_bounds[1]} output bounded",
-                f"1 T1 unif {time_bounds[0]} {time_bounds[1]} output bounded",
-                f"1 M unif {migration_bounds[0]} {migration_bounds[1]} output bounded",
+                f"1 NPOPA unif {size_bounds[0]} {size_bounds[1]} output bounded",
+                f"1 NPOPB unif {size_bounds[0]} {size_bounds[1]} output bounded",
+                f"1 TSPLIT unif {time_bounds[0]} {time_bounds[1]} output bounded",
+                f"1 MIG unif {migration_bounds[0]} {migration_bounds[1]} output bounded",
                 "[COMPLEX PARAMETERS]",
-                "0 N1_HAP = 2*N1 hide",
-                "0 N2_HAP = 2*N2 hide",
+                "0 HAPA = 2*NPOPA hide",
+                "0 HAPB = 2*NPOPB hide",
             ]
         else:
             fail(f"no two-population model is defined for {challenge!r}")
@@ -278,17 +294,22 @@ def prepare(args):
         else [[0] * (hap_counts[0] + 1) for _ in range(hap_counts[1] + 1)]
     )
     callable_variant_records = 0
-    seen = set()
+    rejected_sites = 0
+    previous = {}
     metadata = {"contigs": contigs}
-    for record in iter_vcf_records(args.vcf):
-        chrom, position, alleles, filt = get_alleles(record, metadata)
-        if (chrom, position) in seen:
-            fail(f"duplicate VCF position {chrom}:{position}")
-        seen.add((chrom, position))
+    for records in iter_vcf_records(args.vcf):
+        chrom, position, alleles, filt = get_alleles(records[0], metadata)
+        if position <= previous.get(chrom, 0):
+            fail(f"VCF must be sorted within each contig: {chrom}:{position}")
+        previous[chrom] = position
+        if len(records) > 1:
+            # Stacked mutations at one coordinate are not a biallelic site.
+            alleles = None
         if in_intervals(position - 1, exclusions.get(chrom, [])):
             continue
         if filt not in ("PASS", ".") or alleles is None:
             callable_length -= 1
+            rejected_sites += 1
             continue
         callable_variant_records += 1
         alt_counts = []
@@ -333,12 +354,15 @@ def prepare(args):
         "population_haplotype_counts": hap_counts,
         "sfs": "folded one-dimensional" if len(groups) == 1 else "unfolded joint two-dimensional (REF assumed ancestral)",
         "callable_length_bp": callable_length,
+        "retained_biallelic_snps": callable_variant_records,
+        "rejected_sites": rejected_sites,
         "excluded_bed": options.get("exclude_bed"),
         "mutation_rate_per_generation_per_bp": mutation_rate,
         "assumptions": {
             "ploidy": 2,
             "callability": "VCF ##contig lengths minus excluded BED intervals and rejected VCF records",
             "missing_or_filtered_sites": "excluded from callable sequence",
+            "multiallelic_or_stacked_sites": "excluded from the SFS and from callable sequence",
             "population_size_units": "diploid individuals; model converts sizes to haploid gene copies",
             "growth_and_bottleneck": "instantaneous size change at T generations before present",
             "two_population_migration": "symmetric backward migration; split event merges population 1 into population 0",

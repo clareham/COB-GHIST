@@ -51,6 +51,22 @@ class ConverterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "assume-callable"):
             psmc(self.vcf(""), self.directory / "output")
 
+    def test_psmc_masks_stacked_positions(self):
+        # GHIST VCFs stack several mutations at one coordinate as separate
+        # records; such windows are masked rather than aborting the run.
+        path = self.vcf("1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t0|1\t0|0\n"
+                        "1\t250\t.\tC\tT\t.\tPASS\t.\tGT\t0|0\t0|0\n"
+                        "1\t250\t.\tC\tG\t.\tPASS\t.\tGT\t1|0\t0|0\n")
+        output = self.directory / "output.psmcfa"
+        psmc(path, output, assume_callable=True)
+        self.assertEqual(output.read_text(), ">1\nTKN\n")
+
+    def test_unsorted_positions_are_rejected(self):
+        path = self.vcf("1\t250\t.\tA\tG\t.\tPASS\t.\tGT\t0|1\t0|0\n"
+                        "1\t150\t.\tC\tT\t.\tPASS\t.\tGT\t0|1\t0|0\n")
+        with self.assertRaisesRegex(ValueError, "sorted"):
+            psmc(path, self.directory / "output.psmcfa", assume_callable=True)
+
     def test_multihetsep_preserves_unphased_ambiguity(self):
         path = self.vcf("1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\t0|0\n")
         output = self.directory / "output.txt"
@@ -66,6 +82,14 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(ordered, ["sample_1", "sample_2"])
         self.assertEqual(Path(files[1]).read_text(), "2\t50\t50\tCCCT\n")
 
+    def test_multihetsep_excludes_stacked_positions_from_distance(self):
+        path = self.vcf("1\t100\t.\tA\tG\t.\tPASS\t.\tGT\t0|0\t0|0\n"
+                        "1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0|1\t0|0\n"
+                        "1\t150\t.\tC\tT\t.\tPASS\t.\tGT\t0|1\t0|0\n")
+        output = self.directory / "output.txt"
+        multihetsep(path, output, assume_callable=True)
+        self.assertEqual(output.read_text(), "1\t150\t149\tCTCC\n")
+
     def test_mask_absent_contig_is_not_callable(self):
         path = self.vcf("1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t0|1\t0|0\n")
         mask = self.write("mask.bed", "2\t0\t300\n")
@@ -78,6 +102,15 @@ class ConverterTests(unittest.TestCase):
 
     def test_sweepfinder_folds_without_ancestral_tag(self):
         path = self.vcf("1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t1|1\t0|1\n")
+        output = self.directory / "output.freq"
+        sweepfinder(path, output, folded=True)
+        self.assertEqual(output.read_text(), "position\tx\tn\tfolded\n150\t1\t4\t1\n")
+
+    def test_sweepfinder_skips_stacked_and_multiallelic_sites(self):
+        path = self.vcf("1\t100\t.\tA\tG\t.\tPASS\t.\tGT\t1|1\t0|1\n"
+                        "1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0|0\t0|1\n"
+                        "1\t120\t.\tA\tG,T\t.\tPASS\t.\tGT\t1|2\t0|1\n"
+                        "1\t150\t.\tA\tG\t.\tPASS\t.\tGT\t1|1\t0|1\n")
         output = self.directory / "output.freq"
         sweepfinder(path, output, folded=True)
         self.assertEqual(output.read_text(), "position\tx\tn\tfolded\n150\t1\t4\t1\n")

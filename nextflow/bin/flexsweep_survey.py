@@ -130,6 +130,29 @@ def prepare_vcfs(vcf, mask, directory):
     headers, contigs, handles, counts = [], {}, {}, {}
     samples = None
     last_positions = {}
+    pending = {}
+    stacked = 0
+
+    def write_record(chrom, fields):
+        alias, length = contigs[chrom]
+        if chrom not in handles:
+            target = directory / f"{alias}.vcf"
+            handle = target.open("w")
+            handles[chrom] = handle
+            for header in headers:
+                if header.startswith("#CHROM"):
+                    handle.write(f"##contig=<ID={alias},length={length}>\n")
+                handle.write(header)
+            counts[chrom] = 0
+        fields[0] = alias
+        handles[chrom].write("\t".join(fields) + "\n")
+        counts[chrom] += 1
+
+    def flush(chrom):
+        pos, fields = pending.pop(chrom, (None, None))
+        if fields is not None:
+            write_record(chrom, fields)
+
     try:
         with opener(vcf, "rt") as source:
             for line in source:
@@ -154,9 +177,16 @@ def prepare_vcfs(vcf, mask, directory):
                     pos = int(position)
                     alias, length = contigs[chrom]
                     require(1 <= pos <= length, f"Variant outside contig length: {chrom}:{pos}")
-                    require(pos > last_positions.get(chrom, 0),
-                            f"VCF must be sorted with unique positions per contig: {chrom}:{pos}")
+                    require(pos >= last_positions.get(chrom, 0),
+                            f"VCF must be sorted within each contig: {chrom}:{pos}")
+                    if pos == last_positions.get(chrom):
+                        # Stacked mutations at one coordinate are not a
+                        # biallelic SNP: drop every record at that position.
+                        stacked += 1
+                        pending[chrom] = (pos, None)
+                        continue
                     last_positions[chrom] = pos
+                    flush(chrom)
                     if len(ref) != 1 or len(alt) != 1 or ref not in "ACGT" or alt not in "ACGT":
                         continue
                     if chrom not in mask or coverage(mask[chrom], pos - 1, pos) == 0:
@@ -170,21 +200,14 @@ def prepare_vcfs(vcf, mask, directory):
                         require(gt_index < len(values)
                                 and re.fullmatch(r"[01]\|[01]", values[gt_index]) is not None,
                                 f"Complete phased diploid biallelic GT required: {chrom}:{pos}")
-                    if chrom not in handles:
-                        target = directory / f"{alias}.vcf"
-                        handle = target.open("w")
-                        handles[chrom] = handle
-                        for header in headers:
-                            if header.startswith("#CHROM"):
-                                handle.write(f"##contig=<ID={alias},length={length}>\n")
-                            handle.write(header)
-                        counts[chrom] = 0
-                    fields[0] = alias
-                    handles[chrom].write("\t".join(fields) + "\n")
-                    counts[chrom] += 1
+                    pending[chrom] = (pos, fields)
+            for chrom in list(pending):
+                flush(chrom)
     finally:
         for handle in handles.values():
             handle.close()
+    if stacked:
+        print(f"[flexsweep input] dropped {stacked} stacked positions", file=sys.stderr)
     require(bool(counts), "No accessible biallelic SNPs remain")
     for chrom in counts:
         alias, _ = contigs[chrom]
@@ -287,9 +310,23 @@ def child(stage, arguments):
             classes = set(table["model"].to_list())
             require("neutral" in classes and any(name != "neutral" for name in classes),
                     "Training features must contain both neutral and sweep classes")
-            require(table.height == 2 * options["simulations_per_class"],
-                    "Upstream feature extraction dropped training simulations; "
-                    "inspect logs rather than silently accepting incomplete training")
+            # Upstream feature extraction silently drops simulations whose
+            # statistics cannot be computed (e.g. windows emptied by a
+            # complete sweep); a few losses per thousand are normal, a
+            # large loss indicates a broken simulation batch.
+            expected = 2 * options["simulations_per_class"]
+            neutral_rows = int((table["model"] == "neutral").sum())
+            sweep_rows = table.height - neutral_rows
+            require(table.height >= 0.9 * expected
+                    and min(neutral_rows, sweep_rows) >= 0.45 * expected,
+                    f"Feature extraction kept only {table.height}/{expected} training "
+                    f"simulations ({neutral_rows} neutral, {sweep_rows} sweep)")
+            Path("training/training_rows.json").write_text(json.dumps({
+                "expected": expected, "neutral": neutral_rows, "sweep": sweep_rows,
+                "dropped_by_feature_extraction": expected - table.height}) + "\n")
+            if table.height < expected:
+                print(f"WARNING: feature extraction dropped {expected - table.height} of "
+                      f"{expected} training simulations", file=sys.stderr)
 
         runner = fs.CNN(
             train_data="simulations/fvs.parquet" if stage == "train" else None,
@@ -377,6 +414,7 @@ def main():
     artifact("simulations/neutral_bins.pickle")
     run("train", "options.json")
     artifact("training/model.keras")
+    artifact("training/training_rows.json")
     run("cli", "fvs-vcf", "--vcf_path", "empirical",
         "--suffix", "survey", "--step_vcf", options["scan_step"], *geometry)
     artifact("empirical/fvs_survey.parquet")
@@ -422,6 +460,7 @@ def main():
         "training_schedule": "unmodified CNN.train(): maximum 1000 epochs; "
                              "validation accuracy early stopping, patience 5",
         "haplotypes": 2 * len(samples), "retained_predictions": retained,
+        "training_rows": json.loads(Path("training/training_rows.json").read_text()),
         "contig_aliases": contigs, "accessible_biallelic_snps": counts,
         "coordinates": "predictions.tsv and sweeps.bed: zero-based half-open",
         "bed_score": "integer round(1000 * prob_sweep); intervals are whole scan windows",

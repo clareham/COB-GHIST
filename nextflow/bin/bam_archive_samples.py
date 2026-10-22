@@ -48,7 +48,9 @@ def select(archive, destination, output, maximum=2):
             raise ValueError(f"Multiple BAMs for sample {sample}; merge before running")
         bams[sample] = str(bam)
     with open(output, "w") as handle:
-        writer = csv.writer(handle, delimiter="\t")
+        # Shell callers split this file with cut/mapfile; csv's default
+        # "\r\n" terminator would leave a stray carriage return in paths.
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerow(["sample", "pop", "bam"])
         for row in selected:
             if row["sample"] not in bams:

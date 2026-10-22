@@ -14,7 +14,8 @@ from pathlib import Path
 
 from cyvcf2 import VCF
 
-from callable_regions import callable_bases_in_range, contig_lengths, is_callable, load_mask
+from callable_regions import (callable_bases_in_range, contig_lengths, is_callable, iter_positions,
+                              load_mask)
 
 
 def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=False, split=False):
@@ -27,7 +28,6 @@ def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=Fals
     vcf.set_samples(selected)
     lengths = contig_lengths(vcf)
     mask = load_mask(mask_path) if mask_path else None
-    previous_record = {}
     previous_emitted = {}
     missing_positions = {}
     excluded_until = {}
@@ -39,13 +39,11 @@ def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=Fals
             Path(output).mkdir(parents=True, exist_ok=True)
         else:
             handles[None] = stack.enter_context(open(output, "w"))
-        for rec in vcf:
+        for records in iter_positions(vcf):
+            rec = records[0]
             chrom, pos = rec.CHROM, rec.POS
             if chrom not in lengths or not 1 <= pos <= lengths[chrom]:
                 raise ValueError(f"Record outside declared contig: {chrom}:{pos}")
-            if pos <= previous_record.get(chrom, 0):
-                raise ValueError("Positions must be strictly increasing within each contig")
-            previous_record[chrom] = pos
             intervals = mask.get(chrom, ([], [])) if mask is not None else None
             end = min(pos + len(rec.REF) - 1, lengths[chrom])
             blocked_end = excluded_until.get(chrom, 0)
@@ -59,8 +57,9 @@ def convert(vcf_path, output, samples=None, mask_path=None, assume_callable=Fals
             if not is_callable(intervals, pos):
                 continue
             bases = [rec.REF] + list(rec.ALT)
-            if any(len(base) != 1 or base not in "ACGT" for base in bases):
-                # Unknown/indel spans are not counted as callable sequence.
+            if len(records) > 1 or any(len(base) != 1 or base not in "ACGT" for base in bases):
+                # Unknown/indel spans and stacked mutations at one coordinate
+                # are not counted as callable sequence.
                 missing_positions[chrom] = missing_positions.get(chrom, 0) + callable_bases_in_range(
                     intervals, pos - 1, end)
                 excluded_until[chrom] = end

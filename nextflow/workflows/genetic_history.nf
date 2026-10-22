@@ -67,14 +67,14 @@ workflow GENETIC_HISTORY {
         }
     }
 
-    PSMC(Channel.fromList(byTool['psmc']))
-    MSMC2(Channel.fromList(byTool['msmc2']))
-    FASTSIMCOAL2(Channel.fromList(byTool['fastsimcoal2']))
-    MRPAST(Channel.fromList(byTool['mrpast']))
-    STAIRWAY_PLOT2(Channel.fromList(byTool['stairway_plot2']))
-    PHLASH(Channel.fromList(byTool['phlash']))
-    FASTGLOBETROTTER(Channel.fromList(byTool['fastglobetrotter']))
-    ARCHIE2(Channel.fromList(byTool['archie2']))
+    PSMC(channel.fromList(byTool['psmc']))
+    MSMC2(channel.fromList(byTool['msmc2']))
+    FASTSIMCOAL2(channel.fromList(byTool['fastsimcoal2']))
+    MRPAST(channel.fromList(byTool['mrpast']))
+    STAIRWAY_PLOT2(channel.fromList(byTool['stairway_plot2']))
+    PHLASH(channel.fromList(byTool['phlash']))
+    FASTGLOBETROTTER(channel.fromList(byTool['fastglobetrotter']))
+    ARCHIE2(channel.fromList(byTool['archie2']))
 
     emit:
     psmc         = PSMC.out.result

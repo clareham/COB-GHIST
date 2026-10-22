@@ -47,13 +47,13 @@ workflow RELATEDNESS {
         }
     }
 
-    KING_PLINK(Channel.fromList(byTool['king_plink']))
-    NGSRELATE(Channel.fromList(byTool['ngsrelate']))
-    ADMIXTURE(Channel.fromList(byTool['admixture']))
-    SHAPEIT5(Channel.fromList(byTool['shapeit5']))
-    READ_KIN(Channel.fromList(byTool['read_kin']))
-    ICMLKIN(Channel.fromList(byTool['icmlkin']))
-    GRUPS_RS(Channel.fromList(byTool['grups_rs']))
+    KING_PLINK(channel.fromList(byTool['king_plink']))
+    NGSRELATE(channel.fromList(byTool['ngsrelate']))
+    ADMIXTURE(channel.fromList(byTool['admixture']))
+    SHAPEIT5(channel.fromList(byTool['shapeit5']))
+    READ_KIN(channel.fromList(byTool['read_kin']))
+    ICMLKIN(channel.fromList(byTool['icmlkin']))
+    GRUPS_RS(channel.fromList(byTool['grups_rs']))
 
     emit:
     king_plink = KING_PLINK.out.result

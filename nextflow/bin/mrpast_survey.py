@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import subprocess
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -109,19 +110,61 @@ def emit_contig_vcfs(vcf_path, outdir, contigs, header, samples, exclusions):
     outputs = []
     record_counts = defaultdict(int)
     try:
+        # Emit a minimal, well-formed header: only GT is carried over, so
+        # the source INFO/FORMAT definitions (one of which is unterminated
+        # in the GHIST drops and makes htslib swallow following lines) are
+        # not reproduced.
+        fileformat = next((line for line in header if line.startswith("##fileformat=")),
+                          "##fileformat=VCFv4.2\n")
+        column_line = next(line for line in header if line.startswith("#CHROM"))
         for index, chrom in enumerate(contig_names):
             output = vcf_dir / f"contig_{index:03d}.vcf"
             outputs.append(output)
             handle = open(output, "w", encoding="utf-8")
             handles.append(handle)
-            for line in header:
-                if line.startswith("##contig=<"):
-                    continue
-                if line.startswith("#CHROM"):
-                    handle.write(f"##contig=<ID={chrom},length={contigs[chrom]}>\n")
-                handle.write(line)
+            handle.write(fileformat)
+            handle.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n')
+            handle.write(f"##contig=<ID={chrom},length={contigs[chrom]}>\n")
+            handle.write(column_line)
         index_by_contig = {chrom: index for index, chrom in enumerate(contig_names)}
-        seen = set()
+        previous = {}
+        dropped = defaultdict(int)
+
+        def usable(fields):
+            """Return GT-only fields for a complete, biallelic, PASS SNP record, else None."""
+            ref, alt = fields[3], fields[4]
+            if len(ref) != 1 or len(alt) != 1 or alt == "." or "," in alt:
+                return None
+            if fields[6] not in ("PASS", "."):
+                return None
+            format_fields = fields[8].split(":")
+            if "GT" not in format_fields:
+                fail(f"record has no GT field: {fields[0]}:{fields[1]}")
+            gt_idx = format_fields.index("GT")
+            genotypes = []
+            for sample_call in fields[9:]:
+                values = sample_call.split(":")
+                gt = values[gt_idx] if gt_idx < len(values) else "."
+                alleles = gt.replace("|", "/").split("/")
+                if len(alleles) != 2 or any(a not in ("0", "1") for a in alleles):
+                    return None
+                genotypes.append(gt)
+            return fields[:7] + [".", "GT"] + genotypes
+
+        def emit(group):
+            # Stacked records at one coordinate, multiallelic sites, filtered
+            # records and incomplete genotypes are dropped: tsinfer needs
+            # one clean biallelic site per position.
+            fields = group[0]
+            chrom = fields[0]
+            cleaned = None if len(group) > 1 else usable(fields)
+            if cleaned is None:
+                dropped[chrom] += 1
+                return
+            handles[index_by_contig[chrom]].write("\t".join(cleaned) + "\n")
+            record_counts[chrom] += 1
+
+        group = []
         with open(vcf_path, encoding="utf-8") as source:
             for line in source:
                 if line.startswith("#"):
@@ -132,31 +175,24 @@ def emit_contig_vcfs(vcf_path, outdir, contigs, header, samples, exclusions):
                 chrom, pos = fields[0], int(fields[1])
                 if chrom not in contigs or not 1 <= pos <= contigs[chrom]:
                     fail(f"record outside declared contig bounds: {chrom}:{pos}")
-                if (chrom, pos) in seen:
-                    fail(f"duplicate variant position {chrom}:{pos}")
-                seen.add((chrom, pos))
+                if group and (chrom, pos) != (group[0][0], int(group[0][1])):
+                    emit(group)
+                    group = []
+                if not group:
+                    if pos <= previous.get(chrom, 0):
+                        fail(f"VCF must be sorted within each contig: {chrom}:{pos}")
+                    previous[chrom] = pos
                 if inside_mask(pos - 1, exclusions.get(chrom, [])):
                     continue
-                ref, alt = fields[3], fields[4]
-                if len(ref) != 1 or len(alt) != 1 or alt == "." or "," in alt:
-                    fail(f"tsinfer survey requires biallelic SNPs; found {chrom}:{pos}")
-                if fields[6] not in ("PASS", "."):
-                    fail(f"filtered VCF record must be removed before inference: {chrom}:{pos}")
-                format_fields = fields[8].split(":")
-                if "GT" not in format_fields:
-                    fail(f"record has no GT field: {chrom}:{pos}")
-                gt_idx = format_fields.index("GT")
-                for sample_call in fields[9:]:
-                    values = sample_call.split(":")
-                    gt = values[gt_idx] if gt_idx < len(values) else "."
-                    alleles = gt.replace("|", "/").split("/")
-                    if len(alleles) != 2 or any(a not in ("0", "1") for a in alleles):
-                        fail(f"missing/non-biallelic diploid genotype at {chrom}:{pos}")
-                handles[index_by_contig[chrom]].write(line)
-                record_counts[chrom] += 1
+                group.append(fields)
+            if group:
+                emit(group)
     finally:
         for handle in handles:
             handle.close()
+    if dropped:
+        print(f"[mrpast input] dropped stacked/multiallelic/incomplete sites per contig: "
+              f"{dict(dropped)}", file=sys.stderr)
     retained = [
         (path, chrom, index)
         for index, (chrom, path) in enumerate(zip(contig_names, outputs))
@@ -368,6 +404,9 @@ def run(args):
     arg_files = sorted((outdir / "args").glob("*.trees"))
     if not arg_files or any(path.stat().st_size == 0 for path in arg_files):
         fail("mrpast arginfer did not produce nonempty .trees files")
+    # mrpast process writes into --out-dir but does not create it (the
+    # documented workflow runs `mkdir -p` first).
+    (outdir / "solve").mkdir(parents=True, exist_ok=True)
     process = [
         "mrpast", "process", "-j", str(jobs),
         "--num-times", str(int(options.get("num_times", 50))),

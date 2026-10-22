@@ -11,6 +11,10 @@ process NGSRELATE {
     tag "${meta.challenge}"
     publishDir { "${params.outdir}/${meta.category}/${meta.challenge}/ngsrelate" }, mode: 'copy'
     conda { meta.conda }
+    // All-pairs EM: ~50k pairs for the 317-sample cohort takes several
+    // hours even multi-threaded, well beyond the 2 h default.
+    cpus 4
+    time '8.h'
 
     input:
     tuple val(meta), path(input_file)

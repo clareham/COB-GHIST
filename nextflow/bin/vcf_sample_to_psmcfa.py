@@ -12,7 +12,7 @@ import sys
 
 from cyvcf2 import VCF
 
-from callable_regions import callable_bases_in_range, contig_lengths, load_mask
+from callable_regions import callable_bases_in_range, contig_lengths, iter_positions, load_mask
 
 
 def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_callable=False):
@@ -40,15 +40,19 @@ def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_ca
                 sequence[index] = ord("T")
         sequences[chrom] = sequence
         missing[chrom] = set()
-    previous = {}
-    for rec in vcf:
+    stacked = 0
+    for records in iter_positions(vcf):
+        rec = records[0]
         if rec.CHROM not in lengths or not 1 <= rec.POS <= lengths[rec.CHROM]:
             raise ValueError(f"Record outside declared contig: {rec.CHROM}:{rec.POS}")
-        if rec.POS <= previous.get(rec.CHROM, 0):
-            raise ValueError("VCF positions must be strictly increasing within each contig")
-        previous[rec.CHROM] = rec.POS
-        genotype = rec.genotypes[0]
         index = (rec.POS - 1) // window
+        if len(records) > 1:
+            # Stacked mutations at one coordinate: not a clean biallelic
+            # site, so mask the window like any other non-SNP record.
+            stacked += 1
+            missing[rec.CHROM].add(index)
+            continue
+        genotype = rec.genotypes[0]
         if len(genotype) != 3:
             raise ValueError(f"Expected diploid genotype at {rec.CHROM}:{rec.POS}")
         alleles = genotype[:2]
@@ -80,6 +84,7 @@ def convert(vcf_path, output, sample=None, window=100, mask_path=None, assume_ca
             for index in range(0, len(sequence), 60):
                 handle.write(sequence[index:index + 60].decode("ascii") + "\n")
     print(f"[psmc input] sample={sample}; heterozygous_windows={heterozygous}; "
+          f"stacked_positions_masked={stacked}; "
           f"callability={'BED' if mask_path else 'assumed across declared contigs'}", file=sys.stderr)
 
 
