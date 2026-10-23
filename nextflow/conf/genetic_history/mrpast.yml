@@ -1,0 +1,42 @@
+# mrpast survey environment.
+#
+# Version constraints, all verified against the real packages:
+# - tsdate is not published on conda-forge or bioconda, so it comes from
+#   PyPI (as mrpast's own documentation does).
+# - bio2zarr 0.1.x (needed for Zarr 2) assigns 1-element arrays to scalar
+#   slots, which NumPy 2.4+ turned from a deprecation into an error, so
+#   numpy<2.4 is required. Bioconda's mrpast builds for Python >=3.11 are
+#   compiled against NumPy >=2.4.6, so mrpast also comes from its PyPI
+#   manylinux wheel (`pip install mrpast` per upstream docs).
+# - tsinfer 0.5.1 and bio2zarr 0.1.6 both require Zarr 2.
+# Every runtime dependency of the two pip packages is pinned from
+# conda-forge below, so pip only drops in those two wheels.
+name: mrpast-survey
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - conda-forge::python=3.11
+  - conda-forge::numpy>=2,<2.4
+  - conda-forge::tsinfer=0.5.1
+  - bioconda::bio2zarr=0.1.6
+  - conda-forge::zarr>=2.17,<3
+  - conda-forge::numcodecs>=0.6,<0.16
+  - conda-forge::tskit>=1.0.0
+  - conda-forge::msprime
+  - conda-forge::scipy>=1.13.0
+  - conda-forge::numba>=0.58.1
+  - conda-forge::mpmath
+  - conda-forge::tqdm
+  - conda-forge::appdirs
+  - conda-forge::dataclasses-json
+  - conda-forge::orjson
+  - conda-forge::pandas
+  - bioconda::pyfaidx
+  - conda-forge::pyyaml
+  - conda-forge::tabulate
+  - conda-forge::pip
+  - pip:
+      - mrpast==0.5
+      - tsdate==0.2.7

@@ -52,3 +52,6 @@ renv/python/
 renv/staging/
 packrat/lib*/
 packrat/src/
+
+# data files
+data/
