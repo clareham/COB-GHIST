@@ -106,6 +106,62 @@ Unsupported catalogue tools also stay disabled; enablement is not automatic.
 must never be consumed; [GhistUtils](lib/GhistUtils.groovy) enforces the
 testing-file naming guard.
 
+## Plotting results
+
+From the repository root, install the plotting extra and run the
+[plotting module](../pysrc/plot_results.py):
+
+```bash
+pip install -e '.[plotting]'
+python -m pysrc.plot_results
+# For a different run:
+python -m pysrc.plot_results --results-dir /path/to/results
+```
+
+The default output is `plots.html` at the base of the selected results directory.
+Use `--output /path/to/report.html` to change it (the parent directory must exist).
+Rerun after publishing new results; this is a post-processing command, not an
+inference step or an automatic Nextflow task.
+
+The report groups plots by category and challenge and embeds all images and JSON
+metadata for offline viewing. Source links are relative to the HTML and need the
+original results tree. A complete inventory includes every file, including
+Nextflow execution reports, logs, configuration files, trained models, Parquet
+features and pickle intermediates. Binary intermediates are never deserialized;
+supporting files without an adapter are explicitly marked as linked, not plotted.
+Existing FlexSweep training SVGs are embedded.
+
+Plot adapters cover:
+
+- PSMC's final complete iteration: time in `2N0` generations and size in `N/N0`.
+  No mutation rate or generation length is silently assumed.
+- MSMC2 final within/cross-population coalescence rates in native mutation units,
+  relative cross-coalescence in the generations supplied by `rccr.tsv`, iteration
+  likelihoods, and per-contig multihetsep input counts/callable-base summaries.
+  Cross-coalescence rates are not mislabeled as effective population sizes.
+- ADMIXTURE Q matrices as stacked proportions in original individual order;
+  KING and ngsRelate pairwise-estimate distributions, including negative values.
+  Q files do not provide sample names, so their row indices are used.
+- SweepFinder2 likelihood scans and FlexSweep sweep probabilities by window
+  midpoint/contig, plus published training plots.
+- VCF normalisation counts and BED interval counts/lengths (overlaps counted;
+  an empty BED is a valid zero-interval result).
+- fastsimcoal2 observed folded/joint spectra and `.bestlhoods` parameter/likelihood
+  tables when present. Parameter plots use symlog because columns have different
+  units; they are summaries, not demographic trajectories.
+
+These are exploratory visualisations, not fitted significance thresholds,
+relationship classifications, or validated demographic histories. Missing tools
+are not imputed. Malformed supported outputs are reported per file in the HTML
+and on stderr; the command exits nonzero while preserving the report and the
+other plots. A missing or empty results directory is an error.
+
+Run synthetic plotting/report tests without inference binaries:
+
+```bash
+python -m unittest discover -s tests -p 'test_plot_results.py' -v
+```
+
 ## Configuration
 
 | Location | Purpose |
