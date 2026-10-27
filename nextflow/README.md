@@ -118,18 +118,43 @@ python -m pysrc.plot_results
 python -m pysrc.plot_results --results-dir /path/to/results
 ```
 
+Direct execution also works: `python pysrc/plot_results.py` from the repository
+root, or `python plot_results.py` from inside `pysrc/`. All forms default to the
+repository's `nextflow/results/` directory, independently of the working directory.
+
 The default output is `plots.html` at the base of the selected results directory.
 Use `--output /path/to/report.html` to change it (the parent directory must exist).
 Rerun after publishing new results; this is a post-processing command, not an
 inference step or an automatic Nextflow task.
 
-The report groups plots by category and challenge and embeds all images and JSON
-metadata for offline viewing. Source links are relative to the HTML and need the
+The report mirrors the results directory hierarchy in nested headings and its
+directory navigation: **category → challenge → tool → run/subdirectories → file**.
+For example, `genetic_history/growth/msmc2/growth.msmc2.run/inputs/` is rendered
+as five nested directory headings, with individual files beneath them.
+Root-level Nextflow reports appear directly under the report title. Supporting
+files appear under their own directories too, even when they have no plot.
+Headings deeper than HTML's six native levels use accessible heading roles.
+
+All images and JSON metadata are embedded for offline viewing.
+Source links are relative to the HTML and need the
 original results tree. A complete inventory includes every file, including
 Nextflow execution reports, logs, configuration files, trained models, Parquet
 features and pickle intermediates. Binary intermediates are never deserialized;
 supporting files without an adapter are explicitly marked as linked, not plotted.
 Existing FlexSweep training SVGs are embedded.
+
+The [CLI entry point](../pysrc/plot_results.py) only parses arguments. Plotting
+implementation is organised under [pysrc/plotting/](../pysrc/plotting/):
+
+- [genetic_history.py](../pysrc/plotting/genetic_history.py): demographic-history
+  challenges (PSMC, MSMC2, fastsimcoal2).
+- [relatedness.py](../pysrc/plotting/relatedness.py): relatedness challenges
+  (ADMIXTURE, KING, ngsRelate).
+- [sweep_detection.py](../pysrc/plotting/sweep_detection.py): sweep-detection
+  challenges (SweepFinder2, FlexSweep).
+- [common.py](../pysrc/plotting/common.py): shared table parsing and QC plots.
+- [report.py](../pysrc/plotting/report.py): file discovery, dispatch, directory
+  headings/navigation, and HTML assembly.
 
 Plot adapters cover:
 
