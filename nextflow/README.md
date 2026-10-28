@@ -143,6 +143,86 @@ features and pickle intermediates. Binary intermediates are never deserialized;
 supporting files without an adapter are explicitly marked as linked, not plotted.
 Existing FlexSweep training SVGs are embedded.
 
+### Combined challenge graphics and exploratory target estimates
+
+Each challenge starts with a **single combined overview graphic with a key**.
+Compatible series share axes; incompatible quantities have separate panels:
+
+- Genetic history overlays PSMC and MSMC2 within-population effective population
+  size histories; RCCR has its own panel for two-population challenges.
+- Sweep detection composes the SweepFinder2 CLR scan and FlexSweep probability/
+  candidate-region panels. The SweepFinder2 output does not record a contig, so
+  its coordinates are not silently identified with FlexSweep's contigs.
+- Relatedness composes ancestry proportions, kinship distributions (using shared
+  histogram bins), and provisional pairwise relationship-degree counts.
+  ngsRelate `rab` is not mixed with kinship coefficients.
+
+The original per-file plots, diagnostics and directory hierarchy are retained.
+Downloadable combined PNGs are saved to
+`results/plot_summaries/<category>/<challenge>.png`; numerical estimates, source
+paths, methods, limitations, and named pair/merged-region assignments are saved to
+`results/challenge_estimates.json`. These generated outputs are excluded from
+source discovery on subsequent runs. PNGs are also embedded in the HTML, and
+estimate tables are shown directly beneath each overview. JSON source paths are
+relative to the corresponding challenge directory.
+
+#### Time and population-size conversion
+
+Only **generations**, not calendar time, are reported; no generation length is
+assumed. Mutation rates are read from published assumptions JSON, not inferred
+from challenge names or current Nextflow configuration. Conflicting rates are
+errors. Missing rates leave per-file plots in explicitly labeled native units
+and prevent their inclusion in a scaled overlay.
+
+- PSMC uses `TR` theta from the **same final complete iteration** as its `RS`
+  curve: `N0 = theta / (4 * mu * bin_bp)`, `generations = 2 * N0 * t_RS`,
+  and `Ne = N0 * lambda_RS`. Both pipeline converters use 100-bp bins; this
+  assumption is displayed and may be overridden by `window_size_bp` in the
+  PSMC assumptions JSON. The challenge's published MSMC2 mutation rate is shared
+  with PSMC unless PSMC also records a matching rate.
+- MSMC2 uses `generations = boundary / mu` and
+  `Ne = 1 / (2 * mu * within_population_lambda)`. Cross-population rates are
+  never inverted and labeled as effective population sizes. The existing RCCR
+  output is already in generations. Standalone MSMC2 rate plots retain their
+  rate units but convert their time axis when metadata is available.
+
+#### Target-estimation methods and limitations
+
+Estimates are computed from numerical outputs, **not image pixels**, and are
+exploratory proxies rather than validated submissions:
+
+- **Growth/bottleneck:** fit two constant log-size epochs to finite curve bins,
+  with equal bin weights and at least three bins per epoch. Choose the split
+  with minimum log-size squared error; report its boundary as `generations` and
+  the ratio of geometric-mean recent/ancient size as `post_growth_scaling` or
+  `post_decline_fraction`. Require a direction-consistent change of at least
+  20% and at least 25% improvement over a constant log-size curve. Otherwise
+  mark targets unavailable. PSMC and MSMC2 estimates remain separate; disagreement
+  is not averaged away. Infinite terminal bins are excluded.
+- **Population splits:** recent population-size proxies are medians of the first
+  three within-population MSMC2 `Ne` bins. These are not census-size estimates.
+  The first upward RCCR=0.5 crossing sustained for two bins is a split-time proxy,
+  not an identified split under migration. Its adjacent-bin bracket is a time-grid
+  resolution indicator, **not a confidence interval**. Missing/unresolved crossings,
+  migration rates, and secondary-contact ages are explicitly unavailable.
+- **Sweep locations:** report the global maximum CLR scan position without
+  claiming significance. Merge overlapping/adjacent published FlexSweep BED
+  windows and report their extent plus the midpoint of the highest-probability
+  overlapping window as a location candidate. These are not causal-variant
+  resolutions or confirmed sweep counts. Sweep age, selection coefficient and
+  hard/soft type are unavailable from these outputs.
+- **Relatedness:** provisional KING kinship bins use cutoffs 0.354, 0.177, 0.0884,
+  and 0.0442 (duplicate/MZ-like, first, second, third degree; below that,
+  more distant/unrelated). Per-pair proxies retain published KING individual IDs;
+  Q row names and ngsRelate index-to-name mappings are not guessed. Thresholds
+  are not calibrated for these cohorts/species, especially inbred dogs. Pedigrees
+  and parent-offspring versus sibling distinctions remain unavailable. ADMIXTURE
+  K is a configured component count, not inferred population truth.
+
+Low coverage, background selection, finite time grids and mutation assumptions
+can all bias these summaries. No bootstrap confidence intervals or cross-tool
+consensus are fabricated; inference/validation is needed before scoring.
+
 The [CLI entry point](../pysrc/plot_results.py) only parses arguments. Plotting
 implementation is organised under [pysrc/plotting/](../pysrc/plotting/):
 
@@ -153,14 +233,17 @@ implementation is organised under [pysrc/plotting/](../pysrc/plotting/):
 - [sweep_detection.py](../pysrc/plotting/sweep_detection.py): sweep-detection
   challenges (SweepFinder2, FlexSweep).
 - [common.py](../pysrc/plotting/common.py): shared table parsing and QC plots.
+- [demographic_curves.py](../pysrc/plotting/demographic_curves.py): numerical
+  scaling and curve-derived demographic estimators.
+- [summary.py](../pysrc/plotting/summary.py): shared challenge-summary result types.
 - [report.py](../pysrc/plotting/report.py): file discovery, dispatch, directory
   headings/navigation, and HTML assembly.
 
 Plot adapters cover:
 
-- PSMC's final complete iteration: time in `2N0` generations and size in `N/N0`.
-  No mutation rate or generation length is silently assumed.
-- MSMC2 final within/cross-population coalescence rates in native mutation units,
+- PSMC's final complete iteration, scaled when mutation metadata is available;
+  otherwise explicitly labeled native `2N0` time and `N/N0` size units.
+- MSMC2 final within/cross-population coalescence rates in native rate units,
   relative cross-coalescence in the generations supplied by `rccr.tsv`, iteration
   likelihoods, and per-contig multihetsep input counts/callable-base summaries.
   Cross-coalescence rates are not mislabeled as effective population sizes.
@@ -175,8 +258,8 @@ Plot adapters cover:
   tables when present. Parameter plots use symlog because columns have different
   units; they are summaries, not demographic trajectories.
 
-These are exploratory visualisations, not fitted significance thresholds,
-relationship classifications, or validated demographic histories. Missing tools
+These are exploratory visualisations and explicitly provisional target proxies,
+not calibrated significance thresholds, verified pedigrees, or validated demographic histories. Missing tools
 are not imputed. Malformed supported outputs are reported per file in the HTML
 and on stderr; the command exits nonzero while preserving the report and the
 other plots. A missing or empty results directory is an error.
@@ -184,7 +267,7 @@ other plots. A missing or empty results directory is an error.
 Run synthetic plotting/report tests without inference binaries:
 
 ```bash
-python -m unittest discover -s tests -p 'test_plot_results.py' -v
+python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 ## Configuration

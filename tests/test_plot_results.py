@@ -179,9 +179,9 @@ class PlotTests(unittest.TestCase):
         document = output.read_text()
         parser = ReportParser()
         parser.feed(document)
-        self.assertEqual((count, failures), (2, 0))
-        self.assertEqual(parser.rows, 6)
-        self.assertEqual(len(parser.images), 2)
+        self.assertEqual((count, failures), (3, 0))
+        self.assertEqual(document.count("Supporting file (linked; no plot adapter)"), 4)
+        self.assertEqual(len(parser.images), 3)
         for image in parser.images:
             self.assertTrue(image.startswith("data:image/"))
             self.assertTrue(base64.b64decode(image.split(",", 1)[1], validate=True))
@@ -227,7 +227,7 @@ class PlotTests(unittest.TestCase):
         output, count, failures = report.build_report(self.root)
         parser = ReportParser()
         parser.feed(output.read_text())
-        self.assertEqual((count, failures), (2, 0))
+        self.assertEqual((count, failures), (5, 0))
         path = f"{first}/inputs/contig_0000.multihetsep.txt"
         ancestors = tuple("/".join(path.split("/")[:i]) for i in range(1, 7))
         self.assertIn((7, ancestors, "contig_0000.multihetsep.txt"), parser.headings)
@@ -253,7 +253,7 @@ class PlotTests(unittest.TestCase):
         output, count, failures = report.build_report(self.root / "results", self.root / "custom.html")
         parser = ReportParser()
         parser.feed(output.read_text())
-        self.assertEqual((count, failures), (1, 0))
+        self.assertEqual((count, failures), (2, 0))
         self.assertIn("results/relatedness/a/admixture/test.2.Q", parser.links)
 
     def test_dispatch_uses_challenge_modules_and_shared_qc(self):

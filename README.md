@@ -42,6 +42,13 @@ python -m pysrc.plot_results
 Open `nextflow/results/plots.html`. See the [report documentation](nextflow/README.md#plotting-results)
 for supported formats, units, and custom results directories.
 
+The report includes a combined graphic with a key for each challenge, demographic
+time scaled to generations when published assumptions allow it, and explicitly
+exploratory target estimates. Downloadable PNGs are saved under
+`nextflow/results/plot_summaries/`; estimates and provisional pair/region
+assignments are exported to `nextflow/results/challenge_estimates.json`.
+Targets unsupported by the available outputs are marked unavailable.
+
 Python sources are rooted at `pysrc/`: setuptools discovers packages there and
 installs the `plot_results` and `synapse_retrieval` modules. With an editable
 installation, `python -m plot_results` also runs the report generator.
