@@ -55,3 +55,6 @@ packrat/src/
 
 # data files
 data/
+
+# Exploratory sweep benchmark outputs
+/experiment_results/

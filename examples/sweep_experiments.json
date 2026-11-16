@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "id": "onesweep-bgs-testing",
+      "vcf": "../data/onesweep_bgs.testing.vcf",
+      "mask": "../data/7.accessible.bed",
+      "dataset": "testing",
+      "scenario": "unknown",
+      "split": "exploratory"
+    }
+  ]
+}

@@ -55,4 +55,14 @@ installation, `python -m plot_results` also runs the report generator.
 
 ## Survey of Existing Tools
 
+### SweepFinder2 / Evo 2 experiments
+
+The independent `sweep-experiment` runner supports SweepFinder2 map comparisons,
+optional local Evo 2 context-offset scoring, reference-anchored neutral msprime
+controls, simulation-based B estimates, and held-out null calibration.
+Choose PyTorch binaries with `uv sync --python 3.12 --extra experiments --extra rocm`
+(AMD), `--extra cuda` (NVIDIA), or `--extra cpu`. Select only one backend;
+omit the backend extra for runs without PyTorch.
+See [setup, manifest format, examples, and hardware limitations](docs/sweep_experiments.md).
+
 You may need to install nextflow: [Install Instructions](https://docs.seqera.io/nextflow/install#self-install). This makes it possible to quickly run each of the legacy tools in their own environment rather than lengthy configuration for local installation. Some of these tools are also quite old and may have maintenance issues making them incompatible with modern hardware / ecosystems. Using docker containers, nextflow can isolate and run each tool in its own environment.
