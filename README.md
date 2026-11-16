@@ -31,6 +31,28 @@ Data files are pulled from Synapse programmatically via [pysrc/synapse_retrieval
 
 ### Nextflow
 
+After running the survey pipeline, generate an offline plotting report from the
+repository root:
+
+```bash
+pip install -e '.[plotting]'
+python -m pysrc.plot_results
+```
+
+Open `nextflow/results/plots.html`. See the [report documentation](nextflow/README.md#plotting-results)
+for supported formats, units, and custom results directories.
+
+The report includes a combined graphic with a key for each challenge, demographic
+time scaled to generations when published assumptions allow it, and explicitly
+exploratory target estimates. Downloadable PNGs are saved under
+`nextflow/results/plot_summaries/`; estimates and provisional pair/region
+assignments are exported to `nextflow/results/challenge_estimates.json`.
+Targets unsupported by the available outputs are marked unavailable.
+
+Python sources are rooted at `pysrc/`: setuptools discovers packages there and
+installs the `plot_results` and `synapse_retrieval` modules. With an editable
+installation, `python -m plot_results` also runs the report generator.
+
 ## Survey of Existing Tools
 
 You may need to install nextflow: [Install Instructions](https://docs.seqera.io/nextflow/install#self-install). This makes it possible to quickly run each of the legacy tools in their own environment rather than lengthy configuration for local installation. Some of these tools are also quite old and may have maintenance issues making them incompatible with modern hardware / ecosystems. Using docker containers, nextflow can isolate and run each tool in its own environment.
