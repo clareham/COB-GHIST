@@ -7,51 +7,58 @@ of the existing Nextflow survey and do not modify its outputs.
 
 ## Environment and reference sequences
 
-Use Python 3.11 or 3.12 for Evo 2, following the upstream runtime requirements.
-Install SweepFinder2 and bcftools in your runtime environment (for example via
-Bioconda), then:
+Follow the [two-step environment setup](../README.md#installation--setup).
+All experiment dependencies are installed by default; there are no experiment
+or backend extras to select. The README's `TORCH_BACKEND` setting is the only
+backend switch needed.
+The project does not pin PyTorch versions or CUDA/ROCm repository channels.
+Both the project and PyTorch are installed by `uv pip` into the activated
+Conda environment; no additional virtual environment is created.
+`--torch-backend auto` detects installed GPU drivers and chooses a compatible
+official PyTorch index. If no supported GPU is detected, it falls back to CPU;
+check the selected build and actual GPU execution below before loading Evo 2.
+
+To select CPU explicitly, replace `auto` with `cpu`. To override GPU detection,
+replace `auto` with a CUDA or ROCm backend identifier supported by your installed
+uv release (see `uv pip install --help`). Runtime-channel selection then lives
+in your installation command, not in this project's configuration. Upgrade uv
+if it does not recognize a newly published backend; do not assume detection
+supports every GPU or distribution. If uv still lacks that backend, install
+from the official index selected by the PyTorch installer instead:
 
 ```bash
-uv sync --python 3.12 --extra experiments --extra rocm
-uv run --no-sync sweep-experiment --help
+uv pip install --python "$CONDA_PREFIX/bin/python" --upgrade torch \
+  --index-url <official-index-url>
 ```
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first.
-Select **one** PyTorch backend:
+When changing backends in an existing
+environment, add `--reinstall-package torch` to ensure the build is replaced.
+PyTorch selects its matching kernel dependencies, including ROCm Triton when
+required; the project does not independently constrain Triton.
 
-| Backend | Installation | PyTorch repository |
-|---|---|---|
-| AMD / Linux | `uv sync --python 3.12 --extra experiments --extra rocm` | ROCm 6.3 |
-| NVIDIA / Linux or Windows | `uv sync --python 3.12 --extra experiments --extra cuda` | CUDA 12.8 |
-| CPU / Linux, Windows, macOS | `uv sync --python 3.12 --extra experiments --extra cpu` | CPU index; PyPI native wheel on macOS |
-| No PyTorch (SF2/simulation only) | `uv sync --python 3.12 --extra experiments` | None |
+Different indexes may offer different PyTorch versions, so do not attribute
+score differences solely to hardware. Automatic selection does not validate
+Evo 2 compatibility.
+Rebuild or reinstall compiled Evo 2/Vortex extensions against the selected
+PyTorch ABI and run upstream numerical tests before interpreting results.
 
-These extras pin PyTorch 2.7.1, an upstream-recommended Evo 2 baseline, rather
-than silently taking a newer binary/kernel ABI. The backend version names refer
-to the wheel runtimes; confirm your GPU and installed driver are compatible.
+The backend version names refer to the **wheel build runtimes**, not the installed
+ROCM-SMI library. For example, `ROCM-SMI-LIB version: 7.8.0` identifies that
+management component; it neither proves the HIP runtime version nor implies
+that a `rocm7.8` PyTorch wheel repository exists.
+Confirm your GPU, kernel driver, and host OS
+are compatible with the selected build; a newer management-library version alone
+does not establish compatibility.
 CPU PyTorch does not enable CPU inference in the Evo 2 adapter.
-The package manager does not auto-detect hardware. Unsupported platform/wheel
-combinations fail to resolve rather than silently selecting a different backend.
-
-The extras are mutually exclusive under uv; do not use `--all-extras`.
-Switch backends by repeating `uv sync` with only the desired backend extra.
-The checked-in `uv.lock` records all backend branches; add `--locked` to require
-that exact resolution without updating it.
-`uv sync` manages the project's `.venv`, not an activated Bioconda environment:
-keep external bcftools/SweepFinder2 on PATH or specify their executable paths.
-Use `uv run --no-sync ...` after syncing, or pass the same extras to `uv run`,
-so a default sync does not remove the selected optional dependencies.
-
-Only explicitly routed packages use the PyTorch indexes; ordinary dependencies
-still come from PyPI. Plain pip ignores `[tool.uv.sources]` and uv's extra
-conflicts. For a manually managed pip/Conda Python environment instead, install
-PyTorch from exactly one official index, then the project **without** a backend extra:
-
-```bash
-# AMD example; substitute /cu128 or /cpu for another backend.
-python -m pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/rocm6.3
-python -m pip install -e '.[experiments]'
-```
+The documented `uv pip` installation does not consume `uv.lock`. Record
+`uv pip freeze --python "$CONDA_PREFIX/bin/python"`, `conda list --explicit`,
+and the selected backend with experiment results for reproducibility.
+Repeat the PyTorch installation command with `--upgrade` when deliberately
+refreshing the backend. Ordinary project dependencies come from PyPI.
+Keep the Conda environment activated so Python, SweepFinder2, and bcftools
+remain on PATH, and run commands directly without `uv run` or `uv sync`.
+The [official PyTorch installer](https://pytorch.org/get-started/locally/)
+can help select a wheel repository compatible with your hardware.
 
 The local `rustysweepfinder` directory is currently a standalone Cargo crate,
 not an installable Python package. The former unresolved `rssf` Python extra
@@ -61,16 +68,27 @@ and Python build metadata exist.
 Verify the installed binary in the selected environment:
 
 ```bash
-uv run --no-sync python -c "import torch; print(torch.__version__, torch.version.cuda, torch.version.hip); print('GPU available:', torch.cuda.is_available())"
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.version.hip); print('GPU available:', torch.cuda.is_available())"
 ```
 
-The optional extra supplies `biocommons.seqrepo`, msprime, and Biopython.
+For AMD expect a ROCm wheel build, a nonempty `torch.version.hip`,
+and `GPU available: True`. To test actual execution, not just enumeration:
+
+```bash
+python -c "import torch; assert torch.version.hip; x = torch.ones((256, 256), device='cuda'); print((x @ x)[0, 0].item())"
+```
+
+PyTorch intentionally uses the `cuda` device/API names on ROCm too. The matrix
+operation should print `256.0`; successful execution still does not validate
+Evo 2's separate compiled kernels.
+
+The default dependencies include `biocommons.seqrepo`, msprime, and Biopython.
 SweepFinder2 and bcftools remain external executables. Evo 2 is intentionally
-not installed by this extra: first install a hardware-compatible PyTorch and
+not installed by the project: first install a hardware-compatible PyTorch and
 the upstream Evo 2/Vortex kernel dependencies, then the official `evo2` package
-using that environment's Python. Auxiliary installs are not managed by the
-project's extras: keep them in a dedicated environment or reapply them after an
-exact `uv sync` (which removes undeclared packages). Do not install an incompatible
+using that same Conda environment's Python. Auxiliary installs are not declared
+in the project's dependencies; record their versions with the experiment.
+Do not install an incompatible
 PyTorch build as a side effect of installing kernels.
 Do not assume that installing a ROCm PyTorch wheel also ports Vortex, FlashAttention,
 or Transformer Engine. No sequence data are sent to a remote inference service.

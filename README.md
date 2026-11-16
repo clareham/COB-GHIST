@@ -1,68 +1,80 @@
 # COB-GHIST
-GHIST challenge with Chicago Open Bioinformatics
+
+GHIST challenge with Chicago Open Bioinformatics.
 
 ## Installation & Setup
 
-### Python: Retrieving Data Files
+With [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
+installed, run from the repository root:
 
-Data files are pulled from Synapse programmatically via [pysrc/synapse_retrieval.py](pysrc/synapse_retrieval.py). To use it:
-
-1. Create a Python environment (3.10–3.13; `synapseclient` doesn't yet support 3.14+) and install the project from the repo root:
+1. **Create one environment** for Python, SweepFinder2, and bcftools:
 
    ```bash
-   conda create -n ghist26 python=3.12
+   conda create -y -n ghist26 --override-channels -c conda-forge -c bioconda \
+     python uv sweepfinder2 bcftools
    conda activate ghist26
-   pip install -e .
    ```
 
-2. Add a Synapse [personal access token](https://help.synapse.org/docs/Managing-Your-Account.2055405596.html#ManagingYourAccount-PersonalAccessTokens) to a `.env` file in the repo root (gitignored):
-
-   ```
-   SYNAPSE-PAT=<your-synapse-personal-access-token>
-   ```
-
-3. Run the script to download and unpack the data into `data/`:
+2. **Install the project and PyTorch into it:**
 
    ```bash
-   python pysrc/synapse_retrieval.py
+   uv pip install --python "$CONDA_PREFIX/bin/python" -e .
+   TORCH_BACKEND=auto  # AMD override: use a compatible rocm channel if needed.
+   uv pip install --python "$CONDA_PREFIX/bin/python" --upgrade torch --torch-backend "$TORCH_BACKEND"
    ```
 
-### R (lang)
+Keep `ghist26` activated and run commands directly: no separate virtual
+environment or `uv sync` is needed. All project dependencies, including msprime,
+SeqRepo, and Biopython, install by default. `uv pip` does not use `uv.lock`.
 
-### Nextflow
+uv selects the PyTorch backend automatically. For AMD, override `TORCH_BACKEND` if
+needed with a compatible ROCm channel listed by `uv pip install --help`.
+GPU drivers must already be installed; detection may fall back to CPU.
+**Evo 2 requires separate model/kernel setup and a supported GPU**; installing
+ROCm PyTorch alone is insufficient. See the
+[Evo 2 and reference setup guide](docs/sweep_experiments.md#environment-and-reference-sequences).
 
-After running the survey pipeline, generate an offline plotting report from the
-repository root:
+## Download data
+
+Copy [example.env](example.env) to [`.env`](.env), then replace the placeholder with your Synapse
+[personal access token](https://help.synapse.org/docs/Managing-Your-Account.2055405596.html#ManagingYourAccount-PersonalAccessTokens):
 
 ```bash
-pip install -e '.[plotting]'
-python -m pysrc.plot_results
+cp -n example.env .env
 ```
 
-Open `nextflow/results/plots.html`. See the [report documentation](nextflow/README.md#plotting-results)
-for supported formats, units, and custom results directories.
+Then download and unpack data into [data/](data/). The token file is gitignored.
 
-The report includes a combined graphic with a key for each challenge, demographic
-time scaled to generations when published assumptions allow it, and explicitly
-exploratory target estimates. Downloadable PNGs are saved under
-`nextflow/results/plot_summaries/`; estimates and provisional pair/region
-assignments are exported to `nextflow/results/challenge_estimates.json`.
-Targets unsupported by the available outputs are marked unavailable.
+```bash
+python -m synapse_retrieval
+```
 
-Python sources are rooted at `pysrc/`: setuptools discovers packages there and
-installs the `plot_results` and `synapse_retrieval` modules. With an editable
-installation, `python -m plot_results` also runs the report generator.
+## Survey pipeline and reports
 
-## Survey of Existing Tools
+Install [Nextflow](https://docs.seqera.io/nextflow/install#self-install) and follow
+the [pipeline instructions](nextflow/README.md). After the pipeline finishes,
+generate the offline report:
 
-### SweepFinder2 / Evo 2 experiments
+```bash
+python -m plot_results
+```
+
+Open [plots.html](nextflow/results/plots.html). The report includes challenge
+summaries, downloadable PNGs, and exploratory target estimates; unsupported
+targets are marked unavailable. See the
+[report documentation](nextflow/README.md#plotting-results) for output formats
+and custom result directories.
+
+## SweepFinder2 / Evo 2 experiments
 
 The independent `sweep-experiment` runner supports SweepFinder2 map comparisons,
 optional local Evo 2 context-offset scoring, reference-anchored neutral msprime
 controls, simulation-based B estimates, and held-out null calibration.
-Choose PyTorch binaries with `uv sync --python 3.12 --extra experiments --extra rocm`
-(AMD), `--extra cuda` (NVIDIA), or `--extra cpu`. Select only one backend;
-omit the backend extra for runs without PyTorch.
-See [setup, manifest format, examples, and hardware limitations](docs/sweep_experiments.md).
+Check available commands:
 
-You may need to install nextflow: [Install Instructions](https://docs.seqera.io/nextflow/install#self-install). This makes it possible to quickly run each of the legacy tools in their own environment rather than lengthy configuration for local installation. Some of these tools are also quite old and may have maintenance issues making them incompatible with modern hardware / ecosystems. Using docker containers, nextflow can isolate and run each tool in its own environment.
+```bash
+sweep-experiment --help
+```
+
+See the [experiment guide](docs/sweep_experiments.md) for manifests, examples,
+reference data, and hardware limitations.
