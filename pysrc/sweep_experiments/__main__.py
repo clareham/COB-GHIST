@@ -12,7 +12,8 @@ def parser() -> argparse.ArgumentParser:
     sub = root.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="Run a JSON experiment manifest")
     run.add_argument("--manifest", type=Path, required=True)
-    run.add_argument("--output", type=Path, required=True, help="New directory; never overwritten")
+    run.add_argument("--output", type=Path, required=True,
+                     help="Output directory; existing generated files are overwritten")
     run.add_argument("--configurations", default="physical,constant",
                      help="Comma-separated physical,constant,map,bmap")
     run.add_argument("--sweepfinder", default="SweepFinder2")

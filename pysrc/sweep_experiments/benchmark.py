@@ -95,7 +95,9 @@ def run(args) -> Path:
     bcftools_version = subprocess.run(
         [args.bcftools, "--version"], capture_output=True, text=True, check=True).stdout.splitlines()[0]
     output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    if output.exists():
+        LOG.warning("Reusing output directory %s; generated files will be overwritten", output)
+    output.mkdir(parents=True, exist_ok=True)
     provenance = {"manifest": file_metadata(manifest_path), "arguments": {
         key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
         if key != "func"}, "inputs": {}, "commands": [], "status": "running",
@@ -126,7 +128,7 @@ def run(args) -> Path:
             if truth is not None and (not math.isfinite(float(truth)) or float(truth) < 1):
                 raise ValueError(f"{name}: sweep_position must be a positive coordinate")
             directory = output / name
-            directory.mkdir()
+            directory.mkdir(exist_ok=True)
 
             def source(key: str) -> Path:
                 path = (base / case[key]).resolve()

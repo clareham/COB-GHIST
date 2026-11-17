@@ -313,9 +313,18 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(json.loads((output / "run.json").read_text())["status"], "complete")
         with (output / "summary.tsv").open() as handle:
             self.assertEqual(len(list(csv.DictReader(handle, delimiter="\t"))), 3)
-        with self.assertRaises(FileExistsError):
+        sentinel = output / "test" / "keep.txt"
+        sentinel.write_text("unrelated file")
+        (output / "summary.tsv").write_text("stale summary")
+        with self.assertLogs(benchmark.LOG, level="WARNING") as messages:
             main(["run", "--manifest", str(manifest), "--output", str(output),
+                  "--configurations", "physical,constant,map", "--grid", "10",
                   "--sweepfinder", executable])
+        self.assertTrue(any("Reusing output directory" in message for message in messages.output))
+        self.assertEqual(sentinel.read_text(), "unrelated file")
+        self.assertEqual(json.loads((output / "run.json").read_text())["status"], "complete")
+        with (output / "summary.tsv").open() as handle:
+            self.assertEqual(len(list(csv.DictReader(handle, delimiter="\t"))), 3)
 
     @unittest.skipUnless(shutil.which("bcftools"), "bcftools not installed")
     def test_real_sweepfinder_bmap_mode(self):

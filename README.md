@@ -76,5 +76,14 @@ Check available commands:
 sweep-experiment --help
 ```
 
+```
+sweep-experiment run \
+  --manifest examples/sweep_experiments.json \
+  --output experiment_results/sf2-evo \
+  --configurations physical,constant \
+  --evo --allow-rocm --model evo2_7b \
+  --seqrepo /usr/local/share/seqrepo
+```
+
 See the [experiment guide](docs/sweep_experiments.md) for manifests, examples,
 reference data, and hardware limitations.

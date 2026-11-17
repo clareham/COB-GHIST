@@ -121,7 +121,9 @@ sweep-experiment run \
 ```
 
 `--sweepfinder` and `--bcftools` override executable names or paths.
-Output directories must be new. Failures propagate as exceptions with command
+Existing run and per-case directories are accepted. Reruns overwrite generated
+files; unrelated files and outputs from configurations not rerun are retained.
+This reruns the analysis rather than resuming it. Failures propagate as exceptions with command
 logs retained; a run is finished only when `run.json` says `complete`.
 
 The example manifest intentionally labels the challenge `unknown` and
