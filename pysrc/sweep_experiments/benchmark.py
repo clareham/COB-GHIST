@@ -217,9 +217,9 @@ def run(args) -> Path:
 
                 reference = Reference(args.seqrepo, case["dataset"])
                 provenance.setdefault("references", {})[name] = {
-                    "assembly": "GRCh38.p14", "accession": reference.accession}
+                    "assembly": reference.ASSEMBLY, "accession": reference.accession}
                 selected = sites[::args.evo_stride]
-                # Fail on reference mismatch before a model download or GPU allocation.
+                # Validate coordinates before a model download or GPU allocation.
                 for site in selected:
                     reference.check(site)
                 if predictor is None:

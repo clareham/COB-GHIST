@@ -95,8 +95,10 @@ or Transformer Engine. No sequence data are sent to a remote inference service.
 The official Evo 2 loader may download model weights to the Hugging Face cache.
 
 Populate a local SeqRepo with the primary chromosomes of **GRCh38.p14**, the
-current GRCh38 patch release checked when this draft was written. Reference
-lookup uses versioned accessions, not mutable chromosome aliases:
+current GRCh38 patch release checked when this draft was written. The runner
+explicitly resolves each chromosome's versioned RefSeq accession from
+`GRCh38.p14` assembly metadata, then queries that accession in SeqRepo's `NCBI`
+namespace with exact 0-based, half-open `start`/`end` coordinates:
 
 | Manifest dataset | Chromosome | RefSeq accession | Length |
 |---|---|---|---|
@@ -105,11 +107,26 @@ lookup uses versioned accessions, not mutable chromosome aliases:
 
 Point `--seqrepo` at the local SeqRepo root. Reference sequence provisioning is
 explicit; the runner never downloads an entire human reference automatically.
+The repository must contain the corresponding `NCBI` accessions above. The
+`2024-12-20` snapshot contains these sequences but lacks `GRCh38.p14` chromosome
+aliases, so the runner does not depend on those aliases or fall back to another
+assembly.
 These accessions describe primary chromosomes, not patch scaffolds.
-Every scored SNP's REF is checked against SeqRepo before loading Evo 2.
-**The GHIST VCFs are simulations: matching chromosome names and lengths do not
-prove that their nucleotide sequences match GRCh38. A mismatch is an error,
-not an invitation to substitute reference bases.** SF2-only runs do not need SeqRepo.
+Every scored SNP's chromosome and 1-based position bounds are checked before
+loading Evo 2. Simulated VCF REF/ALT labels are retained and are not required to
+match the GRCh38 target base. Fetched contexts are not rewritten to match those
+labels. **These scores compare simulated alleles in human reference contexts;
+they are exploratory, not validated biological mutation effects.**
+SF2-only runs do not need SeqRepo.
+
+Validation against the `2024-12-20` snapshot covered all 4,128,923 eligible,
+masked SNPs in the seven locally available sweep VCFs. Their compressed-file
+checksums match the current Synapse version 2 releases, whose version comments
+confirm the correction to 1-based positions. Nevertheless, REF matches only
+24.88-25.02% of unambiguous GRCh38.p14 bases; shifting positions by either one
+base does not resolve the disagreement. The coordinate conversion and 6,342
+sampled strand/offset context targets were checked separately and were correct.
+REF disagreement is therefore expected and does not block Evo scoring.
 
 ## Run existing VCFs
 

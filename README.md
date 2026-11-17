@@ -82,7 +82,7 @@ sweep-experiment run \
   --output experiment_results/sf2-evo \
   --configurations physical,constant \
   --evo --allow-rocm --model evo2_7b \
-  --seqrepo /usr/local/share/seqrepo
+  --seqrepo /usr/local/share/seqrepo/2024-12-20
 ```
 
 See the [experiment guide](docs/sweep_experiments.md) for manifests, examples,

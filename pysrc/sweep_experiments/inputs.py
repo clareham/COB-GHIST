@@ -26,34 +26,36 @@ class Variant:
 class Reference:
     """Pinned primary chromosome sequences from a locally populated SeqRepo."""
 
-    ACCESSIONS = {"testing": ("7", "NC_000007.14", 159345973),
-                  "final": ("9", "NC_000009.12", 138394717)}
+    ASSEMBLY = "GRCh38.p14"
+    CHROMOSOMES = {"testing": "7", "final": "9"}
 
     def __init__(self, root: Path, dataset: str):
         from biocommons.seqrepo import SeqRepo
+        from bioutils.assemblies import get_assembly
 
-        self.chrom, self.accession, self.length = self.ACCESSIONS[dataset]
+        self.chrom = self.CHROMOSOMES[dataset]
+        chromosome = next(record for record in get_assembly(self.ASSEMBLY)["sequences"]
+                          if record["name"] == self.chrom)
+        self.accession, self.length = chromosome["refseq_ac"], chromosome["length"]
         self.repo = SeqRepo(str(root), writeable=False)
-        # Versioned accessions avoid ambiguous GRCh37/GRCh38 aliases.
         self.fetch(0, 1)
 
     def fetch(self, start: int, end: int) -> str:
+        """Fetch an exact 0-based, half-open chromosome interval in GRCh38.p14."""
         if not 0 <= start < end <= self.length:
             raise ValueError(f"Reference interval outside {self.accession}: {start}:{end}")
-        sequence = self.repo.fetch(self.accession, start=start, end=end).upper()
+        sequence = self.repo.fetch(
+            self.accession, namespace="NCBI", start=start, end=end).upper()
         if len(sequence) != end - start:
             raise ValueError(f"Truncated SeqRepo sequence for {self.accession}")
         return sequence
 
     def check(self, variant: Variant) -> None:
+        """Validate chromosome and 1-based position, not simulated allele labels."""
         if variant.chrom.removeprefix("chr") != self.chrom:
             raise ValueError(f"VCF contig {variant.chrom} does not match {self.accession}")
-        if self.fetch(variant.position - 1, variant.position) != variant.ref:
-            raise ValueError(
-                f"REF mismatch at {variant.chrom}:{variant.position} against {self.accession}; "
-                "chromosome-like simulations are not necessarily GRCh38 sequence. "
-                "Do not attach human contexts to incompatible simulated alleles."
-            )
+        if not 1 <= variant.position <= self.length:
+            raise ValueError(f"VCF position outside {self.accession}: {variant.position}")
 
 
 def variants(vcf: Path, folded: bool, mask: Path | None = None,

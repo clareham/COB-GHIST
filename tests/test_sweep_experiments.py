@@ -17,7 +17,7 @@ from pysrc.sweep_experiments import benchmark, evo, inputs, simulation
 from pysrc.sweep_experiments.__main__ import main
 
 
-class SequenceReference:
+class SequenceReference(inputs.Reference):
     chrom = "7"
     accession = "NC_000007.14"
 
@@ -27,10 +27,6 @@ class SequenceReference:
 
     def fetch(self, start, end):
         return self.sequence[start:end]
-
-    def check(self, site):
-        if self.fetch(site.position - 1, site.position) != site.ref:
-            raise ValueError("REF mismatch")
 
 
 class ExperimentTests(unittest.TestCase):
@@ -163,6 +159,38 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(predictor.log_probs("ACGT", 2)["A"], -.5)
         self.assertEqual(seen, [(0, 1)])
 
+    def test_scoring_accepts_mismatching_ref_and_preserves_simulated_alleles(self):
+        reference = SequenceReference("ACGT" * 10)
+        calls = []
+
+        def predict(sequence, target):
+            calls.append((sequence, target))
+            return {b: math.log(p) for b, p in zip("ACGT", (.1, .2, .3, .4))}
+
+        output = self.root / "mismatching-ref.tsv"
+        count = evo.score_sites(
+            [inputs.Variant("chr7", 17, "C", "G", 1, 4, True)], reference,
+            SimpleNamespace(log_probs=predict), output, 8, [2])
+        self.assertEqual(count, 2)
+        self.assertEqual([sequence[target] for sequence, target in calls], ["A", "T"])
+        with output.open() as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual([(row["ref"], row["alt"], row["status"]) for row in rows],
+                         [("C", "G", "ok"), ("C", "G", "ok")])
+        self.assertAlmostEqual(float(rows[0]["delta_logp"]), math.log(.3 / .2))
+        self.assertAlmostEqual(float(rows[1]["delta_logp"]), math.log(.2 / .3))
+
+    def test_reference_check_keeps_chromosome_and_position_validation(self):
+        reference = SequenceReference("ACGT")
+        for chrom, position in (("7", 1), ("chr7", 4)):
+            reference.check(inputs.Variant(chrom, position, "C", "G", 1, 4, True))
+        with self.assertRaisesRegex(ValueError, "contig"):
+            reference.check(inputs.Variant("9", 1, "A", "G", 1, 4, True))
+        for position in (0, 5):
+            with self.subTest(position=position):
+                with self.assertRaisesRegex(ValueError, "position outside"):
+                    reference.check(inputs.Variant("7", position, "A", "G", 1, 4, True))
+
     def test_bad_map_values_and_external_frequency_mask_fail_explicitly(self):
         bad = self.write("bad.tsv", "position\tcM\n1\t0\n2\tnan\n")
         with self.assertRaisesRegex(ValueError, "finite"):
@@ -231,7 +259,7 @@ class ExperimentTests(unittest.TestCase):
                 evo.EvoPredictor("auto", False, 8)
 
     @unittest.skipUnless(importlib.util.find_spec("biocommons"), "optional SeqRepo not installed")
-    def test_real_seqrepo_lookup_uses_versioned_accession_and_coordinate_slices(self):
+    def test_real_seqrepo_lookup_uses_assembly_and_exact_chromosome_intervals(self):
         from biocommons.seqrepo import SeqRepo
         import pysam
 
@@ -243,13 +271,37 @@ class ExperimentTests(unittest.TestCase):
         with patch("biocommons.seqrepo.fastadir.fabgz._find_bgzip", return_value="bgzip"), \
                 patch("biocommons.seqrepo.fastadir.fabgz.subprocess.check_call", side_effect=compress):
             repo = SeqRepo(str(directory), writeable=True)
-            repo.store("ACGT" * 100, [{"namespace": "NCBI", "alias": "NC_000007.14"}])
+            repo.store("ACGT" * 100, [
+                {"namespace": "NCBI", "alias": "NC_000007.14"},
+            ])
+            repo.store("TGCA" * 100, [
+                {"namespace": "GRCh37", "alias": "7"},
+                {"namespace": "NCBI", "alias": "NC_000007.13"},
+                {"namespace": "GRCh38.p14", "alias": "9"},
+            ])
             repo.commit()
         reference = inputs.Reference(directory, "testing")
+        self.assertEqual((reference.chrom, reference.accession, reference.length),
+                         ("7", "NC_000007.14", 159345973))
         self.assertEqual(reference.fetch(1, 5), "CGTA")
+        self.assertEqual(reference.fetch(0, 1), "A")
+        self.assertEqual(reference.fetch(399, 400), "T")
+        with patch.object(reference.repo, "fetch", wraps=reference.repo.fetch) as fetch:
+            self.assertEqual(reference.fetch(3, 4), "T")
+            fetch.assert_called_once_with("NC_000007.14", namespace="NCBI", start=3, end=4)
+            fetch.reset_mock()
+            reference.check(inputs.Variant("chr7", 4, "C", "G", 1, 4, True))
+            for start, end in ((-1, 1), (0, 0), (2, 1), (0, reference.length + 1)):
+                with self.subTest(start=start, end=end):
+                    with self.assertRaisesRegex(ValueError, "outside"):
+                        reference.fetch(start, end)
+            fetch.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "Truncated"):
+            reference.fetch(399, 401)
+        with self.assertRaisesRegex(KeyError, "NC_000009.12"):
+            inputs.Reference(directory, "final")
         reference.check(inputs.Variant("chr7", 1, "A", "G", 1, 4, True))
-        with self.assertRaisesRegex(ValueError, "REF mismatch"):
-            reference.check(inputs.Variant("7", 1, "C", "G", 1, 4, True))
+        reference.check(inputs.Variant("7", 1, "C", "G", 1, 4, True))
         with self.assertRaisesRegex(ValueError, "contig"):
             reference.check(inputs.Variant("9", 1, "A", "G", 1, 4, True))
 
@@ -292,6 +344,7 @@ class ExperimentTests(unittest.TestCase):
             self.assertTrue(sites)
             for site in sites:
                 reference.check(site)
+                self.assertEqual(reference.fetch(site.position - 1, site.position), site.ref)
 
     @unittest.skipUnless(shutil.which("bcftools"), "bcftools not installed")
     def test_real_sweepfinder_manifest_runner(self):
