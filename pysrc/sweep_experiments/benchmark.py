@@ -1,7 +1,6 @@
 """Manifest-driven scans and held-out, per-configuration null calibration."""
 
 import csv
-import hashlib
 import json
 import logging
 import math
@@ -10,18 +9,11 @@ import re
 import shutil
 import subprocess
 
-from .inputs import (Reference, check_mask, read_frequency, variants, write_bvalues, write_frequency,
-                     write_recombination)
+from .inputs import (Reference, check_mask, file_metadata, read_frequency, variants, write_bvalues,
+                     write_frequency, write_recombination)
+from .calibration import empirical_p
 
 LOG = logging.getLogger(__name__)
-
-
-def file_metadata(path: Path) -> dict:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return {"path": str(path), "sha256": digest.hexdigest()}
 
 
 def run_command(command: list[str], log: Path) -> None:
@@ -41,7 +33,7 @@ def scan_peak(path: Path) -> tuple[float, float]:
     return max(points, key=lambda item: item[0])
 
 
-def evo_peak(path: Path, window_size: int) -> tuple[float, float]:
+def ntv3_peak(path: Path, window_size: int) -> tuple[float, float]:
     # Average strands/offsets per SNP first so missing contexts do not reweight SNPs.
     by_site: dict[int, list[float]] = {}
     with path.open() as handle:
@@ -52,7 +44,7 @@ def evo_peak(path: Path, window_size: int) -> tuple[float, float]:
     for position, scores in by_site.items():
         bins.setdefault((position - 1) // window_size, []).append(sum(scores) / len(scores))
     if not bins:
-        raise ValueError("No valid Evo scores to aggregate")
+        raise ValueError("No valid NTv3 scores to aggregate")
     index = max(bins, key=lambda key: sum(bins[key]) / len(bins[key]))
     return sum(bins[index]) / len(bins[index]), index * window_size + (window_size + 1) / 2
 
@@ -80,13 +72,18 @@ def run(args) -> Path:
     allowed = {"physical", "constant", "map", "bmap"}
     if not configurations or set(configurations) - allowed or len(set(configurations)) != len(configurations):
         raise ValueError(f"Configurations must be unique members of {sorted(allowed)}")
-    if args.grid < 2 or args.evo_stride < 1 or args.window_size < 1:
-        raise ValueError("Need grid >=2, positive Evo stride and window size")
-    if args.evo and args.seqrepo is None:
-        raise ValueError("--evo requires a locally populated --seqrepo")
-    if args.evo:
-        from .evo import windows
+    if args.grid < 2 or args.ntv3_stride < 1 or args.window_size < 1:
+        raise ValueError("Need grid >=2, positive NTv3 stride and window size")
+    if not 0 < args.alpha < 1:
+        raise ValueError("alpha must be between 0 and 1")
+    if args.null_summary is not None and not args.null_summary.is_file():
+        raise FileNotFoundError(f"Null summary not found: {args.null_summary}")
+    if args.ntv3 and args.seqrepo is None:
+        raise ValueError("--ntv3 requires a locally populated --seqrepo")
+    if args.ntv3:
+        from .ntv3 import validate_context, windows
 
+        validate_context(args.context)
         offsets = [int(value) for value in args.offsets.split(",")]
         windows(args.context + 1, 3 * args.context, args.context, offsets)
     executable = shutil.which(args.sweepfinder)
@@ -101,7 +98,8 @@ def run(args) -> Path:
     provenance = {"manifest": file_metadata(manifest_path), "arguments": {
         key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
         if key != "func"}, "inputs": {}, "commands": [], "status": "running",
-        "sweepfinder_binary": file_metadata(Path(executable)), "bcftools_version": bcftools_version}
+        "sweepfinder_binary": file_metadata(Path(executable)), "bcftools_version": bcftools_version,
+        "cases": {}}
     metadata_file = output / "run.json"
 
     def save() -> None:
@@ -155,6 +153,10 @@ def run(args) -> Path:
                 shutil.copyfile(frequency_source, freq)
             else:
                 write_frequency(freq, sites)
+            provenance["cases"][name] = {
+                "chrom": sites[0].chrom, "start0": frequency_sites[0].position - 1,
+                "end0": frequency_sites[-1].position, "scenario": scenario,
+                "split": case["split"], "mask": str(mask)}
             if case.get("background_spectrum") and case.get("background_vcf"):
                 raise ValueError("Choose background_spectrum or background_vcf, not both")
             spectrum = directory / "background.spect"
@@ -212,29 +214,33 @@ def run(args) -> Path:
                        "localization_error_bp": abs(position - float(truth)) if truth is not None else ""}
                 writer.writerow(row)
                 handle.flush()
-            if args.evo:
-                from .evo import EvoPredictor, score_sites
+            if args.ntv3:
+                from .ntv3 import NTv3Predictor, score_sites
 
                 reference = Reference(args.seqrepo, case["dataset"])
                 provenance.setdefault("references", {})[name] = {
                     "assembly": reference.ASSEMBLY, "accession": reference.accession}
-                selected = sites[::args.evo_stride]
+                selected = sites[::args.ntv3_stride]
                 # Validate coordinates before a model download or GPU allocation.
                 for site in selected:
                     reference.check(site)
                 if predictor is None:
-                    predictor = EvoPredictor(args.model, args.allow_rocm, args.context)
-                    provenance["evo"] = predictor.metadata()
+                    predictor = NTv3Predictor(args.model, args.model_revision, args.context)
+                    provenance["ntv3"] = predictor.metadata()
                     save()
-                scores = directory / "evo.tsv"
+                scores = directory / "ntv3.tsv"
                 score_sites(selected, reference, predictor, scores, args.context, offsets)
-                score, position = evo_peak(scores, args.window_size)
+                score, position = ntv3_peak(scores, args.window_size)
                 row = {"case": name, "scenario": scenario, "split": case["split"],
-                       "configuration": "evo_mean_abs_delta", "score": score,
+                       "configuration": "ntv3_mean_abs_delta", "score": score,
                        "peak_position": position, "sweep_position": truth if truth is not None else "",
                        "localization_error_bp": abs(position - float(truth)) if truth is not None else ""}
                 writer.writerow(row)
                 handle.flush()
+    from .regions import export_regions
+
+    save()
+    provenance["region_exports"] = export_regions(output, args.alpha, args.null_summary)
     provenance["status"] = "complete"
     save()
     return summary
@@ -260,7 +266,7 @@ def evaluate(summary: Path, output: Path, alpha: float) -> None:
         calibration = [row for row in group if row["split"] == "calibration"]
         if not calibration or any(row["scenario"] not in ("neutral", "bgs") for row in calibration):
             raise ValueError(f"{configuration}: calibration must contain only no-sweep controls")
-        null = [float(row["score"]) for row in calibration]
+        null = sorted(float(row["score"]) for row in calibration)
         if any(not math.isfinite(value) for value in null):
             raise ValueError("Nonfinite calibration scores")
         if 1 / (len(null) + 1) > alpha:
@@ -274,7 +280,7 @@ def evaluate(summary: Path, output: Path, alpha: float) -> None:
             score = float(row["score"])
             if not math.isfinite(score):
                 raise ValueError("Nonfinite evaluation score")
-            pvalue = (1 + sum(value >= score for value in null)) / (len(null) + 1)
+            pvalue = empirical_p(score, null)
             report.append({**row, "empirical_p": pvalue, "detected": pvalue <= alpha})
     if not report:
         raise ValueError("No evaluation cases")

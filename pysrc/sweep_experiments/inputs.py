@@ -4,12 +4,21 @@ from bisect import bisect_right
 from dataclasses import dataclass
 from itertools import groupby
 import csv
+import hashlib
 import math
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 from typing import Iterator
+
+
+def file_metadata(path: Path) -> dict:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"path": str(path), "sha256": digest.hexdigest()}
 
 
 @dataclass(frozen=True)
@@ -140,14 +149,14 @@ def read_frequency(path: Path, chrom: str, folded: bool) -> list[Variant]:
     return sites
 
 
-def check_mask(sites: list[Variant], path: Path) -> None:
+def callable_intervals(path: Path, chromosome: str) -> list[tuple[int, int]]:
     intervals: list[tuple[int, int]] = []
     with path.open() as handle:
         for line in handle:
             if not line.strip() or line.startswith(("#", "track", "browser")):
                 continue
             chrom, start, end, *_ = line.split()
-            if chrom != sites[0].chrom:
+            if chrom != chromosome:
                 continue
             left, right = int(start), int(end)
             if left < 0 or right <= left:
@@ -159,6 +168,11 @@ def check_mask(sites: list[Variant], path: Path) -> None:
             merged[-1] = merged[-1][0], max(right, merged[-1][1])
         else:
             merged.append((left, right))
+    return merged
+
+
+def check_mask(sites: list[Variant], path: Path) -> None:
+    merged = callable_intervals(path, sites[0].chrom)
     starts = [left for left, _ in merged]
     for site in sites:
         index = bisect_right(starts, site.position - 1) - 1

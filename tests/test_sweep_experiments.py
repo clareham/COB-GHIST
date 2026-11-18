@@ -7,14 +7,13 @@ import math
 import os
 from pathlib import Path
 import shutil
-import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from pysrc.sweep_experiments import benchmark, evo, inputs, simulation
-from pysrc.sweep_experiments.__main__ import main
+from pysrc.sweep_experiments import benchmark, ntv3, inputs, simulation
+from pysrc.sweep_experiments.__main__ import main, parser
 
 
 class SequenceReference(inputs.Reference):
@@ -93,8 +92,8 @@ class ExperimentTests(unittest.TestCase):
                 calls.append((sequence, target))
                 return {b: math.log(p) for b, p in zip("ACGT", (.1, .2, .3, .4))}
 
-        output = self.root / "evo.tsv"
-        count = evo.score_sites([inputs.Variant("7", 17, "A", "G", 1, 4, True)],
+        output = self.root / "ntv3.tsv"
+        count = ntv3.score_sites([inputs.Variant("7", 17, "A", "G", 1, 4, True)],
                                 reference, Predictor(), output, 8, [2, 5])
         self.assertEqual(count, 4)
         self.assertEqual([target for _, target in calls], [2, 2, 5, 5])
@@ -104,60 +103,25 @@ class ExperimentTests(unittest.TestCase):
         self.assertAlmostEqual(float(rows[1]["delta_logp"]), math.log(.2 / .4))
         self.assertAlmostEqual(float(rows[1]["p_A"]), .4)
         self.assertEqual(rows[1]["strand"], "-")
-        for window in evo.windows(17, 40, 8, [2, 5]):
+        for window in ntv3.windows(17, 40, 8, [2, 5]):
             genomic_target = (window.start + window.target if window.strand == "+"
                               else window.end - 1 - window.target)
             self.assertEqual(genomic_target, 16)
-        self.assertEqual(evo.windows(1, 40, 8, [2]), [])
+        self.assertEqual(ntv3.windows(1, 40, 8, [2]), [])
         with self.assertRaisesRegex(ValueError, "offset"):
-            evo.windows(17, 40, 8, [0])
+            ntv3.windows(17, 40, 8, [-1])
+        for offsets in ([], [2, 2], [8]):
+            with self.subTest(offsets=offsets):
+                with self.assertRaises(ValueError):
+                    ntv3.windows(17, 40, 8, offsets)
 
-    def test_model_predicts_at_previous_token_not_target_token(self):
-        class Scalar:
-            def item(self):
-                return -.5
-
-        class Distribution:
-            def float(self):
-                return self
-
-            def log_softmax(self, dim):
-                return self
-
-            def __getitem__(self, key):
-                return Scalar()
-
-        seen = []
-
-        class Logits:
-            def __getitem__(self, key):
-                seen.append(key)
-                return Distribution()
-
-        class Tokenizer:
-            def tokenize(self, sequence):
-                return list(range(len(sequence)))
-
-        class Model:
-            tokenizer = Tokenizer()
-
-            def __call__(self, inputs):
-                return (Logits(), None), None
-
-        class Torch:
-            long = "long"
-
-            def tensor(self, values, **kwargs):
-                return values
-
-            def inference_mode(self):
-                from contextlib import nullcontext
-                return nullcontext()
-
-        predictor = evo.EvoPredictor.__new__(evo.EvoPredictor)
-        predictor.model, predictor.torch = Model(), Torch()
-        self.assertEqual(predictor.log_probs("ACGT", 2)["A"], -.5)
-        self.assertEqual(seen, [(0, 1)])
+    def test_masked_offsets_include_both_window_endpoints(self):
+        windows = ntv3.windows(17, 40, 8, [0, 7])
+        self.assertEqual([w.target for w in windows], [0, 0, 7, 7])
+        for window in windows:
+            genomic_target = (window.start + window.target if window.strand == "+"
+                              else window.end - 1 - window.target)
+            self.assertEqual(genomic_target, 16)
 
     def test_scoring_accepts_mismatching_ref_and_preserves_simulated_alleles(self):
         reference = SequenceReference("ACGT" * 10)
@@ -168,7 +132,7 @@ class ExperimentTests(unittest.TestCase):
             return {b: math.log(p) for b, p in zip("ACGT", (.1, .2, .3, .4))}
 
         output = self.root / "mismatching-ref.tsv"
-        count = evo.score_sites(
+        count = ntv3.score_sites(
             [inputs.Variant("chr7", 17, "C", "G", 1, 4, True)], reference,
             SimpleNamespace(log_probs=predict), output, 8, [2])
         self.assertEqual(count, 2)
@@ -203,60 +167,129 @@ class ExperimentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inconsistent"):
             inputs.read_frequency(frequency, "7", True)
 
-    def test_rocm_model_selection_and_explicit_opt_in(self):
-        class FakeOOM(RuntimeError):
-            pass
+    def test_ntv3_cli_and_early_context_validation(self):
+        required = ["run", "--manifest", str(self.root / "missing.json"),
+                    "--output", str(self.root / "output")]
+        args = parser().parse_args(required)
+        self.assertFalse(args.ntv3)
+        self.assertEqual((args.model, args.model_revision), (ntv3.MODEL, ntv3.REVISION))
+        with patch("sys.stderr"):
+            for legacy in (["--evo"], ["--allow-rocm"], ["--model", "evo2_7b"],
+                           ["--evo-stride", "1"]):
+                with self.subTest(legacy=legacy), self.assertRaises(SystemExit):
+                    parser().parse_args(required + legacy)
+        manifest = self.write("manifest.json", json.dumps({"cases": [{
+            "id": "test", "vcf": "sites.vcf", "split": "exploratory"}]}))
+        args.manifest = manifest
+        args.ntv3 = True
+        with self.assertRaisesRegex(ValueError, "--seqrepo"):
+            benchmark.run(args)
+        args.seqrepo = self.root
+        for context in (0, 127, 129, 1_048_704):
+            args.context = context
+            with self.subTest(context=context), self.assertRaisesRegex(ValueError, "multiple of 128"):
+                benchmark.run(args)
+        self.assertFalse(args.output.exists())
 
+    def test_ntv3_runner_records_new_outputs_provenance_and_stride(self):
+        manifest = self.write("manifest.json", json.dumps({"cases": [{
+            "id": name, "vcf": "sites.vcf", "mask": "mask.bed", "dataset": "testing",
+            "scenario": "unknown", "split": "exploratory"} for name in ("first", "second")]}))
+        self.write("sites.vcf", "fixture")
+        self.write("mask.bed", "7\t0\t2000\n")
+        executable = self.write("sf2", "fixture")
+        sites = [inputs.Variant("7", p, "A", "G", 1, 4, True) for p in (257, 513, 769)]
+        reference = SequenceReference("ACGT" * 512)
+        metadata = {"model": ntv3.MODEL, "revision": ntv3.REVISION,
+                    "scoring": "masked_target_bidirectional_logp_alt_minus_logp_ref"}
         calls = []
 
-        class FakeEvo:
-            def __init__(self, name):
-                calls.append(name)
-                self.model = SimpleNamespace(eval=lambda: None)
+        class Predictor:
+            def log_probs(self, sequence, target):
+                calls.append((sequence, target))
+                return {b: math.log(p) for b, p in zip("ACGT", (.1, .2, .3, .4))}
 
-        torch = SimpleNamespace(
-            version=SimpleNamespace(hip="test"), OutOfMemoryError=FakeOOM,
-            cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1,
-                                 mem_get_info=lambda i: (24 * 1024**3, 24 * 1024**3)))
-        with patch.dict(sys.modules, {"torch": torch, "evo2": SimpleNamespace(Evo2=FakeEvo)}):
-            with self.assertRaisesRegex(RuntimeError, "experimental"):
-                evo.EvoPredictor("auto", False, 8)
-            with patch.object(evo.EvoPredictor, "log_probs", return_value={"A": -.5}):
-                predictor = evo.EvoPredictor("auto", True, 8)
-                self.assertEqual(predictor.selected, "evo2_7b")
-                self.assertEqual(calls, ["evo2_7b"])
-                self.assertEqual(predictor.attempts[0]["model"], "evo2_40b")
+            def metadata(self):
+                return metadata
 
-    def test_only_oom_causes_model_downgrade(self):
-        class FakeOOM(RuntimeError):
-            pass
+        def run_command(command, log):
+            Path(command[-1]).write_text("location\tLR\n500\t2\n")
 
-        calls = []
+        with patch.object(benchmark.shutil, "which", return_value=str(executable)), \
+                patch.object(benchmark.subprocess, "run",
+                             return_value=SimpleNamespace(stdout="bcftools test\n")), \
+                patch.object(benchmark, "variants", return_value=sites), \
+                patch.object(benchmark, "Reference", return_value=reference), \
+                patch.object(benchmark, "run_command", side_effect=run_command), \
+                patch.object(ntv3, "NTv3Predictor", return_value=Predictor()) as load:
+            main(["run", "--manifest", str(manifest), "--output", str(self.root / "run"),
+                  "--configurations", "physical", "--ntv3", "--seqrepo", str(self.root),
+                  "--context", "128", "--offsets", "0,64,127", "--ntv3-stride", "2"])
+        load.assert_called_once_with(ntv3.MODEL, ntv3.REVISION, 128)
+        self.assertEqual(len(calls), 24)
+        output = self.root / "run"
+        with (output / "first" / "ntv3.tsv").open() as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual({row["position"] for row in rows}, {"257", "769"})
+        self.assertEqual({row["status"] for row in rows}, {"ok"})
+        self.assertFalse((output / "first" / "evo.tsv").exists())
+        provenance = json.loads((output / "run.json").read_text())
+        self.assertEqual(provenance["status"], "complete")
+        self.assertEqual(provenance["ntv3"], metadata)
+        self.assertNotIn("evo", provenance)
+        regions = output / "regions" / "first"
+        self.assertTrue((regions / "physical.candidates.bed").is_file())
+        self.assertEqual((regions / "physical.sweeps.bed").read_text(), "")
+        self.assertEqual(len((regions / "ntv3.sites.bed").read_text().splitlines()), 2)
+        for line in (regions / "physical.candidates.bed").read_text().splitlines():
+            self.assertEqual(len(line.split("\t")), 3)
+        export_metadata = json.loads((output / "regions" / "metadata.json").read_text())
+        self.assertEqual(export_metadata["status"], "complete")
+        self.assertEqual(export_metadata["cases"]["first"]["raw_glm"]["sha256"],
+                         benchmark.file_metadata(output / "first" / "ntv3.tsv")["sha256"])
+        with (output / "summary.tsv").open() as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual([row["configuration"] for row in rows],
+                         ["physical", "ntv3_mean_abs_delta"] * 2)
+        self.assertAlmostEqual(float(rows[1]["score"]), (math.log(3) + math.log(2)) / 2)
 
-        class FakeEvo:
-            def __init__(self, name):
-                calls.append(name)
-                if name == "evo2_40b":
-                    raise FakeOOM("test memory pressure")
-                self.model = SimpleNamespace(eval=lambda: None)
+    def test_runner_automatically_exports_calibrated_ghist_sweep_regions(self):
+        cases = []
+        for i in range(20):
+            name = f"case-{i}"
+            self.write(f"{name}.vcf", name)
+            cases.append({"id": name, "vcf": f"{name}.vcf", "mask": "mask.bed",
+                          "dataset": "testing", "scenario": "neutral" if i < 19 else "unknown",
+                          "split": "calibration" if i < 19 else "exploratory"})
+        manifest = self.write("manifest.json", json.dumps({"cases": cases}))
+        self.write("mask.bed", "7\t0\t1000\n")
+        executable = self.write("sf2", "fixture")
+        sites = [inputs.Variant("7", p, "A", "G", 1, 4, True) for p in (100, 500, 900)]
 
-        torch = SimpleNamespace(
-            version=SimpleNamespace(hip=None), OutOfMemoryError=FakeOOM,
-            cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1,
-                                 get_device_capability=lambda i: (9, 0),
-                                 mem_get_info=lambda i: (200 * 1024**3, 200 * 1024**3),
-                                 empty_cache=lambda: None))
-        with patch.dict(sys.modules, {"torch": torch, "evo2": SimpleNamespace(Evo2=FakeEvo)}), \
-                patch.object(evo.EvoPredictor, "log_probs", return_value={"A": -.5}):
-            predictor = evo.EvoPredictor("auto", False, 8)
-            self.assertEqual(calls, ["evo2_40b", "evo2_7b"])
-            self.assertEqual(predictor.selected, "evo2_7b")
-        def broken_backend(name):
-            raise ImportError("missing kernel")
+        def run_command(command, log):
+            path = Path(command[-1])
+            index = int(path.parent.name.split("-")[-1])
+            path.write_text(f"location\tLR\n100\t1\n500\t{index + 1}\n900\t1\n")
 
-        with patch.dict(sys.modules, {"torch": torch, "evo2": SimpleNamespace(Evo2=broken_backend)}):
-            with self.assertRaisesRegex(ImportError, "missing kernel"):
-                evo.EvoPredictor("auto", False, 8)
+        with patch.object(benchmark.shutil, "which", return_value=str(executable)), \
+                patch.object(benchmark.subprocess, "run",
+                             return_value=SimpleNamespace(stdout="bcftools test\n")), \
+                patch.object(benchmark, "variants", return_value=sites), \
+                patch.object(benchmark, "run_command", side_effect=run_command):
+            main(["run", "--manifest", str(manifest), "--output", str(self.root / "run"),
+                  "--configurations", "physical"])
+        output = self.root / "run"
+        self.assertEqual((output / "regions" / "case-19" / "physical.sweeps.bed").read_text(),
+                         "7\t300\t700\n")
+        for i in range(19):
+            self.assertEqual((output / "regions" / f"case-{i}" / "physical.sweeps.bed").read_text(), "")
+        with (output / "regions" / "case-19" / "physical.regions.tsv").open() as handle:
+            row = next(row for row in csv.DictReader(handle, delimiter="\t")
+                       if row["kind"] == "prediction")
+        self.assertEqual(float(row["empirical_p"]), .05)
+        self.assertEqual(row["n_null"], "19")
+        self.assertEqual(row["glm_status"], "disabled")
+        self.assertEqual(json.loads((output / "run.json").read_text())["status"], "complete")
 
     @unittest.skipUnless(importlib.util.find_spec("biocommons"), "optional SeqRepo not installed")
     def test_real_seqrepo_lookup_uses_assembly_and_exact_chromosome_intervals(self):
@@ -366,6 +399,20 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(json.loads((output / "run.json").read_text())["status"], "complete")
         with (output / "summary.tsv").open() as handle:
             self.assertEqual(len(list(csv.DictReader(handle, delimiter="\t"))), 3)
+        for configuration in ("physical", "constant", "map"):
+            directory = output / "regions" / "test"
+            candidates = directory / f"{configuration}.candidates.bed"
+            self.assertTrue(candidates.read_text().strip())
+            for line in candidates.read_text().splitlines():
+                chrom, start, end = line.split("\t")
+                self.assertEqual(chrom, "7")
+                self.assertTrue(99 <= int(start) < int(end) <= 500)
+            self.assertEqual((directory / f"{configuration}.sweeps.bed").read_text(), "")
+            with (directory / f"{configuration}.sf2.tsv").open() as handle:
+                evidence = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertTrue(evidence)
+            self.assertTrue(all(row["status"] == "uncalibrated" and row["empirical_p"] == "."
+                                for row in evidence))
         sentinel = output / "test" / "keep.txt"
         sentinel.write_text("unrelated file")
         (output / "summary.tsv").write_text("stale summary")

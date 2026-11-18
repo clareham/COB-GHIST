@@ -1,8 +1,8 @@
-# SweepFinder2 and Evo 2 experiments
+# SweepFinder2 and NTv3 experiments
 
 This is an exploratory benchmark, not a validated sweep caller. The console
 script `sweep-experiment` (also `python -m sweep_experiments`) provides `run`,
-`simulate`, `estimate-b`, and `evaluate` subcommands. The modules are independent
+`simulate`, `estimate-b`, `evaluate`, and `export-regions` subcommands. The modules are independent
 of the existing Nextflow survey and do not modify its outputs.
 
 ## Environment and reference sequences
@@ -16,7 +16,7 @@ Both the project and PyTorch are installed by `uv pip` into the activated
 Conda environment; no additional virtual environment is created.
 `--torch-backend auto` detects installed GPU drivers and chooses a compatible
 official PyTorch index. If no supported GPU is detected, it falls back to CPU;
-check the selected build and actual GPU execution below before loading Evo 2.
+check the selected build and actual GPU execution below before loading NTv3.
 
 To select CPU explicitly, replace `auto` with `cpu`. To override GPU detection,
 replace `auto` with a CUDA or ROCm backend identifier supported by your installed
@@ -38,9 +38,10 @@ required; the project does not independently constrain Triton.
 
 Different indexes may offer different PyTorch versions, so do not attribute
 score differences solely to hardware. Automatic selection does not validate
-Evo 2 compatibility.
-Rebuild or reinstall compiled Evo 2/Vortex extensions against the selected
-PyTorch ABI and run upstream numerical tests before interpreting results.
+NTv3 inference on your GPU. The adapter uses the official NTv3 PyTorch model;
+no Evo2, Vortex, Transformer Engine, or separately installed FlashAttention
+package is required by this adapter. Run numerical checks on the target
+hardware before interpreting results.
 
 The backend version names refer to the **wheel build runtimes**, not the installed
 ROCM-SMI library. For example, `ROCM-SMI-LIB version: 7.8.0` identifies that
@@ -49,7 +50,7 @@ that a `rocm7.8` PyTorch wheel repository exists.
 Confirm your GPU, kernel driver, and host OS
 are compatible with the selected build; a newer management-library version alone
 does not establish compatibility.
-CPU PyTorch does not enable CPU inference in the Evo 2 adapter.
+CPU PyTorch does not enable CPU inference in the NTv3 adapter.
 The documented `uv pip` installation does not consume `uv.lock`. Record
 `uv pip freeze --python "$CONDA_PREFIX/bin/python"`, `conda list --explicit`,
 and the selected backend with experiment results for reproducibility.
@@ -80,19 +81,29 @@ python -c "import torch; assert torch.version.hip; x = torch.ones((256, 256), de
 
 PyTorch intentionally uses the `cuda` device/API names on ROCm too. The matrix
 operation should print `256.0`; successful execution still does not validate
-Evo 2's separate compiled kernels.
+the NTv3 model.
 
 The default dependencies include `biocommons.seqrepo`, msprime, and Biopython.
-SweepFinder2 and bcftools remain external executables. Evo 2 is intentionally
-not installed by the project: first install a hardware-compatible PyTorch and
-the upstream Evo 2/Vortex kernel dependencies, then the official `evo2` package
-using that same Conda environment's Python. Auxiliary installs are not declared
-in the project's dependencies; record their versions with the experiment.
-Do not install an incompatible
-PyTorch build as a side effect of installing kernels.
-Do not assume that installing a ROCm PyTorch wheel also ports Vortex, FlashAttention,
-or Transformer Engine. No sequence data are sent to a remote inference service.
-The official Evo 2 loader may download model weights to the Hugging Face cache.
+SweepFinder2 and bcftools remain external executables. Transformers is a project
+dependency; PyTorch is installed separately using the hardware-compatible command
+above. No additional NTv3 Python package or TE source build is needed.
+
+Request access to [InstaDeepAI/NTv3_pretrained](https://huggingface.co/InstaDeepAI/NTv3_pretrained)
+and accept the **InstaDeep Open Model Licence (non-commercial use, including
+outputs)**. Approval is manual. Authenticate in the same Conda environment:
+
+```bash
+hf auth login
+```
+
+The loader downloads weights, tokenizer, and custom Python modelling code to the
+Hugging Face cache. It uses `trust_remote_code=True`, pinned by default to Hub
+commit `fd58207244d828957e633c591f9babd8bb2b970e`; review upstream code before use.
+`--model-revision` overrides that revision for all three artifacts. Record and
+prefer a commit hash over a moving branch. Access errors and missing dependencies
+are reported directly, not replaced with another model.
+No sequence data are sent to a remote inference service.
+Existing Evo2/Transformer Engine installations are not used by this runner.
 
 Populate a local SeqRepo with the primary chromosomes of **GRCh38.p14**, the
 current GRCh38 patch release checked when this draft was written. The runner
@@ -113,7 +124,7 @@ aliases, so the runner does not depend on those aliases or fall back to another
 assembly.
 These accessions describe primary chromosomes, not patch scaffolds.
 Every scored SNP's chromosome and 1-based position bounds are checked before
-loading Evo 2. Simulated VCF REF/ALT labels are retained and are not required to
+loading NTv3. Simulated VCF REF/ALT labels are retained and are not required to
 match the GRCh38 target base. Fetched contexts are not rewritten to match those
 labels. **These scores compare simulated alleles in human reference contexts;
 they are exploratory, not validated biological mutation effects.**
@@ -126,7 +137,8 @@ confirm the correction to 1-based positions. Nevertheless, REF matches only
 24.88-25.02% of unambiguous GRCh38.p14 bases; shifting positions by either one
 base does not resolve the disagreement. The coordinate conversion and 6,342
 sampled strand/offset context targets were checked separately and were correct.
-REF disagreement is therefore expected and does not block Evo scoring.
+REF disagreement is therefore expected and does not block NTv3 scoring.
+The target base itself is masked before inference.
 
 ## Run existing VCFs
 
@@ -163,10 +175,13 @@ Each case produces:
 
 - Per-site `.freq` input and the actual `SweepFinder2 -f` background `.spect`.
 - SF2 scans and individual subprocess logs.
-- Optional Evo per-SNP/per-context/per-strand probability rows.
+- Optional `ntv3.tsv` per-SNP/per-context/per-strand probability rows.
 - Top-level `summary.tsv`: maximum score, peak coordinate, truth, localization error.
 - Top-level `run.json`: arguments, input SHA-256 digests, commands, reference
-  accessions and selected model/backend metadata when Evo is enabled.
+  accessions and model revision, scoring semantics, precision, and backend
+  metadata under `ntv3` when scoring is enabled.
+- Automatic `regions/` BED3 predictions and separate SF2/gLM decision evidence;
+  see [GHIST BED exports](#ghist-bed-exports-and-decision-evidence).
 
 By default the background SFS is estimated from the case itself. This is the
 self-background baseline, not an independent neutral reference. A case may
@@ -242,51 +257,73 @@ Use Bvalcalc or another justified independent model to generate them.
 Both B and recombination maps are sampled at **frequency-input positions**,
 not scan-grid positions.
 
-## Evo 2 context-position experiments
+## NTv3 context-position experiments
 
 ```bash
 sweep-experiment run \
   --manifest examples/sweep_experiments.json \
-  --output experiment_results/evo-contexts \
+  --output experiment_results/ntv3-contexts \
   --configurations physical,constant \
-  --evo --seqrepo /path/to/seqrepo \
-  --model auto --allow-rocm \
-  --context 8192 --offsets 1024,4096,7168 --evo-stride 1000
+  --ntv3 --seqrepo /path/to/seqrepo \
+  --context 8192 --offsets 1024,4096,7168 --ntv3-stride 1000
 ```
 
-`auto` considers 40B, 7B, then 1B, skipping checkpoints incompatible with
-documented hardware/context requirements or conservative available-memory
-estimates. Each attempted load is probed with the requested context length.
-Only out-of-memory errors cause a smaller-model retry; missing kernels, broken
-imports, and numerical failures propagate rather than being hidden as a
-successful downgrade. A later real-sequence inference OOM is also an error;
-the runner does not mix checkpoints within a result set.
+The checkpoint is `InstaDeepAI/NTv3_pretrained`, an approximately 703M-parameter
+single-base masked language model. Track/annotation checkpoints are not accepted.
+Inference uses float32 on GPU 0 (`cuda:0` for both CUDA and ROCm), without
+quantization, autocast, CPU offload, or multi-GPU placement. ROCm needs no opt-in
+flag. This avoids the Evo2/TE dependency chain, but does **not** establish tested
+7900 XTX compatibility.
 
-Upstream currently documents NVIDIA FP8/Transformer Engine requirements for
-40B and 1B, but BF16 support for 7B. Consequently, on an AMD 7900 XTX this
-adapter can attempt **7B only**, with explicit `--allow-rocm`; actual support
-depends on the installed Vortex/kernel stack and is not guaranteed. It does
-not implement a pure-PyTorch port, quantization, or CPU offload. Multi-GPU
-placement is left to upstream Vortex. GPU fit estimates are screening heuristics,
-not guarantees of maximum possible fit; the context probe tests actual allocation.
+`--context` must be a multiple of **128**, from 128 through 1,048,576 bases,
+because of NTv3's downsampling geometry. Inputs are never silently padded,
+cropped, or truncated. The default is 8192; begin with that or a smaller aligned
+context on a 24 GB card, adjusting offsets to fit. Long-context support is not
+a promise that 1 Mb fits in VRAM. A masked synthetic sequence probes the full
+requested context immediately after loading. OOM, import, download, and
+numerical errors propagate without switching checkpoints, precision, or device.
 
 For each sampled SNP, the window slides so the target appears at each requested
-0-based offset, on both forward and reverse-complement strands. The code reads
-logits at `target - 1` to obtain causal next-token probabilities at the target.
-Offsets must be >=1; unavailable edge contexts are omitted and wholly
+0-based offset, on both forward and reverse-complement strands. The tokenizer
+adds no special tokens, so base and token indices coincide. The target token
+is replaced with `<mask>` before the model runs, and logits are read at
+**`target`**, not `target - 1`. Offsets may include 0 and must be less than the
+context length; duplicates and empty offset lists are rejected.
+Unavailable edge contexts are omitted and wholly
 unscorable sites get an explicit `contig_edge` row. Contexts containing ambiguous
 bases get `ambiguous_context` rows.
 
-Because Evo 2 is causal, tokens **after** the target cannot influence its
-prediction. These experiments vary the amount of preceding context; reversing
-the strand probes the other genomic flank. These are reference contexts,
-not reconstructed sample haplotypes, and do not infer sweep age or strength.
+NTv3 is **bidirectional**: both flanks of the masked target can influence its
+prediction. These experiments vary the allocation of left/right reference
+context and test strand sensitivity. These are reference contexts, not
+reconstructed sample haplotypes, and do not infer sweep age or strength.
 
 The output contains log probabilities of REF and ALT, their log-probability
 difference, and A/C/G/T probabilities in genomic orientation. Probabilities are
 from the full model vocabulary, not renormalized over four bases. Scores use
-natural logarithms. Reverse-complement probability columns are complemented
-back to genomic orientation.
+natural logarithms:
+
+```text
+delta_logp = log P(ALT | context with target masked)
+           - log P(REF | context with target masked)
+```
+
+Reverse-complement probability columns are complemented back to genomic
+orientation. The target is hidden regardless of whether the VCF REF agrees
+with the reference assembly, avoiding target-allele leakage.
+
+### Migrating old Evo2 commands and results
+
+Replace `--evo` with `--ntv3` and `--evo-stride` with `--ntv3-stride`.
+Remove `--allow-rocm` and old `--model auto` / `--model evo2_*` arguments;
+the default is the NTv3 pretrained checkpoint. Old flags fail explicitly.
+Use a **new output directory**: per-site files are now `ntv3.tsv`, provenance
+uses `ntv3`, and the summary configuration is `ntv3_mean_abs_delta`.
+Historical Evo files are not deleted or relabelled. The TSV columns are
+unchanged, but these masked bidirectional probabilities are **not comparable**
+to Evo2's causal next-base probabilities. Recompute calibration controls
+with the same NTv3 model revision, precision, contexts, and scoring settings;
+do not reuse Evo2 null distributions.
 
 As an intentionally simple comparator, summary scores average `abs(delta_logp)`
 across contexts/strands per SNP, then average per fixed physical window and take
@@ -381,22 +418,176 @@ This controls a per-region maximum, not the false discovery rate over an
 arbitrary number of chromosomes. Do not select score directions, context
 positions, windows or maps using evaluation labels.
 
+## GHIST BED exports and decision evidence
+
+Every successful `run` ends by exporting `regions/<case>/` for each case and
+SF2 configuration. The [GHIST sweep instructions](https://www.synapse.org/Synapse:syn74803798/wiki/640755),
+[submission tutorial](https://www.synapse.org/Synapse:syn74803798/wiki/640752),
+and [downloaded example](../data/sweep_submission.example.bed) specify region
+predictions as BED. Our submission files match that example exactly:
+**three tab-separated columns, no header or extra fields**, 0-based half-open
+integer intervals, chromosome `7` or `9` (without `chr`). The updated challenge
+VCFs are 1-based; these are explicitly converted, not copied into BED.
+
+For example:
+
+```text
+7	18500000	18600000
+7	34234000	34454000
+```
+
+### Files produced
+
+For each configuration (`physical`, `constant`, `map`, `bmap` as enabled):
+
+| File in `regions/<case>/` | Purpose |
+| --- | --- |
+| `<configuration>.candidates.bed` | All local SF2 peak support intervals, including uncalibrated candidates. **Not significance-filtered.** |
+| `<configuration>.sweeps.bed` | Proposed sweep regions passing the empirical SF2 cutoff. BED3 for GHIST submission review. Empty if none qualify or calibration is unavailable. |
+| `<configuration>.sf2.tsv` | All callable scan cells: coordinates, raw CLR, empirical p-value, null count, calibration status, and significance flag. |
+| `<configuration>.regions.tsv` | Candidate and predicted-region decisions: coordinates, peak location/CLR/p-value, calibration status, and overlapping raw gLM score summaries. |
+| `ntv3.sites.bed` | Unique successfully scored gLM SNPs as one-base BED3 intervals. **Evidence coverage, not sweep predictions.** Empty for SF2-only runs. |
+
+The original `<run>/<case>/ntv3.tsv` remains the **raw gLM output**, unchanged,
+including signed REF/ALT log probabilities, `delta_logp`, A/C/G/T probabilities,
+strand, offset, context window, and unscored-status rows. It is not replaced
+with a ranking or rounded BED score. `regions/metadata.json` records its path
+and SHA-256, source scan/mask/summary checksums, null counts, column schemas,
+alpha, and the region/p-value definitions. `run.json` links the completed export.
+Only treat the export as complete when both `run.json` and
+`regions/metadata.json` say `complete`.
+
+The region TSV includes `glm_status`, number of scored SNPs and context/strand
+rows, mean absolute delta (average per SNP first, then across SNPs), and maximum
+absolute raw delta. `no_scored_sites` and `disabled` are explicit, not zero
+evidence. Consult the raw signed scores before making biological decisions.
+There is **no automatic gLM threshold, SF2/gLM intersection, or combined p-value**:
+NTv3 is a sequence-compatibility proxy, not a trained sweep caller. The default
+prediction BED selection uses calibrated SF2 evidence; gLM informs manual review.
+
+### SF2 p-values and null requirements
+
+SweepFinder2 emits a **composite likelihood ratio**, not a calibrated p-value.
+We estimate an empirical upper-tail p-value for each CLR against **one maximum
+CLR per independent no-sweep calibration replicate**, separately by SF2
+configuration:
+
+```text
+p = (1 + number of calibration maxima >= observed CLR) / (1 + n_null)
+```
+
+This uses conservative ties and never returns zero. Comparing scan cells against
+null **region maxima** accounts for scanning within a matched region; it is not
+a chi-square approximation or a pointwise test against all correlated null grid
+points. Region annotations report the p-value of their maximum CLR, not a
+separately fitted interval probability.
+
+By default, controls come from `split: calibration`, `scenario: neutral` or
+`bgs` in the same manifest. Calibration cases never get calls or self-calibrated
+p-values. Evaluation and exploratory cases may receive calls, without using
+their truth labels to choose thresholds. Defaults are `--alpha 0.05` and at
+least **19 independent calibration replicates** (prefer many more). With fewer
+replicates, available p-estimates are reported as `insufficient_nulls` but no
+significant sweep BED rows are emitted. With no controls, p-values are `.`,
+status is `uncalibrated`, warnings are logged, and candidate/raw evidence is
+still exported. No synthetic p-values or significance claims are invented.
+
+To supply controls from a separate completed scan:
+
+```bash
+sweep-experiment run \
+  --manifest examples/sweep_experiments.json \
+  --output experiment_results/sf2-ntv3-calibrated \
+  --configurations physical,constant \
+  --ntv3 --seqrepo /path/to/seqrepo \
+  --null-summary experiment_results/matched-null-scans/summary.tsv \
+  --alpha 0.05
+```
+
+`--null-summary` **replaces**, rather than pools with, in-manifest calibration.
+Its sibling `run.json` must say `complete`; SF2 binary checksum, grid, folding
+mode, and constant recombination rate must match. Only calibration no-sweep rows
+are used, never held-out evaluation maxima. Repeated calibration VCF checksums
+and shared calibration/prediction VCF content are rejected.
+
+**You must additionally match** demographic/BGS assumptions, scanned region
+length, sample sizes, mutation model, accessibility/ascertainment, input frequency
+format, background spectrum strategy, and recombination/B-map design. The code
+cannot establish biological comparability from these files. A 1 Mb neutral
+simulation is not a suitable maximum-CLR null for a full-chromosome scan.
+Do not pool different null strata. Testing challenge answers are not null
+controls. P-values are not corrected across configurations or cases, and are
+not genome-wide FDR estimates. Selecting whichever configuration gives the
+smallest p-value requires additional multiple-testing control.
+
+### Region boundaries and re-export
+
+Each SF2 grid location represents a cell extending to the midpoints to its
+neighbors (midpoint boundaries rounded down), clipped to the scanned
+frequency-input span and intersected with the callable mask. The endpoint cells
+stop at the first/last frequency-input base. Fractional grid locations are
+mapped to their containing 1-based base; sub-base spacing can create overlapping
+one-base cells. Adjacent/overlapping significant cells are merged, without
+bridging noncallable gaps. Candidates use local maxima; the leftmost location
+represents a flat peak.
+
+These intervals are **grid-resolution support regions**, not confidence
+intervals, the swept haplotype's extent, or single-base causal localization.
+Sparse grids can give very broad predictions. Calibration tests region-level
+presence, not the accuracy of inferred boundaries or each claimed causal locus.
+No exon restriction or fixed sweep count is silently inferred; in particular,
+the multi-sweep GHIST task's exon-only prior needs explicit scientific review
+against the provided annotations.
+
+You can change alpha or add matched null controls **without rerunning SF2 or
+NTv3**, after a completed BED-enabled run:
+
+```bash
+sweep-experiment export-regions \
+  --run-dir experiment_results/sf2-ntv3 \
+  --null-summary experiment_results/matched-null-scans/summary.tsv \
+  --alpha 0.05
+```
+
+This overwrites the enabled configurations' export files and updates export
+provenance, leaving raw scans/gLM outputs untouched. Keep the callable mask
+unchanged; its checksum is checked. Old runs without case-coordinate metadata
+need to be rerun. Reruns do not delete unrelated or disabled configurations'
+files: use the configurations and file list in the current export metadata.
+Review one chosen configuration's prediction BED per challenge before
+submitting; the pipeline never uploads or submits anything automatically.
+
 ## Validation and sources
 
 ```bash
 SWEEPFINDER2_TEST_BINARY=/path/to/SweepFinder2 \
-  python -m unittest discover -s tests -p test_sweep_experiments.py -v
+  python -m unittest discover -s tests -p 'test_[ns]*.py' -v
 ```
 
 Tests use real bcftools and, when available, real SF2, SeqRepo and msprime.
-GPU-free tests check causal logit indexing, context offsets and strand mapping;
-they do not establish numerical equivalence or hardware compatibility of Evo 2.
-Run upstream Evo 2 numerical tests in the target GPU environment before trusting
-ROCm results.
+GPU-free NTv3 tests use real CPU tensors with a tiny fixture model to check
+target masking, same-position logit indexing, full-vocabulary normalization,
+shape/finite-value checks, pinned loading, and error propagation. Runner tests
+check context offsets, strand mapping, stride, outputs, and provenance.
+They do not load the gated 703M checkpoint or establish ROCm numerical equivalence
+or hardware compatibility. Validate the real model on the target GPU before
+trusting results.
+
+After model access approval and authentication, opt into a real-checkpoint GPU
+smoke test (downloads weights and allocates GPU memory):
+
+```bash
+NTV3_GPU_TEST=1 python -m unittest discover -s tests -p test_ntv3.py -v
+```
+
+`NTV3_TEST_CONTEXT=128` can reduce the smoke-test window; the default is 8192.
+This tests finite masked probabilities and independence from the hidden target
+allele, not biological validity or cross-hardware numerical equivalence.
 
 - [Official SF2 manual](https://github.com/mdegiorgio/SweepFinder2/blob/main/Manual_SweepFinder2_v1.0.pdf),
   sections 3.2, 3.3 and 5.3-5.5.
-- [Evo 2 runtime and hardware requirements](https://github.com/ArcInstitute/evo2).
-- [Evo 2 7B checkpoint](https://huggingface.co/arcinstitute/evo2_7b).
+- [NTv3 pretrained checkpoint and PyTorch interface](https://huggingface.co/InstaDeepAI/NTv3_pretrained).
+- [NTv3 architecture and releases](https://github.com/instadeepai/nucleotide-transformer/blob/main/docs/nucleotide_transformer_v3.md).
+- [NTv3 model licence](https://github.com/instadeepai/nucleotide-transformer/blob/main/MODEL-LICENSE.md).
 - [GRCh38.p14 primary chromosome accessions](https://www.ncbi.nlm.nih.gov/grc/human/data).
 - [Bvalcalc parameters](https://johrilab.github.io/Bvalcalc/guides/params.html).

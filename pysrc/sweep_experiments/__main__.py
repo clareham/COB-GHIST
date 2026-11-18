@@ -5,10 +5,11 @@ import logging
 from pathlib import Path
 
 from . import benchmark
+from .ntv3 import MODEL, REVISION
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="Exploratory SweepFinder2/Evo 2 experiments")
+    root = argparse.ArgumentParser(description="Exploratory SweepFinder2/NTv3 experiments")
     sub = root.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="Run a JSON experiment manifest")
     run.add_argument("--manifest", type=Path, required=True)
@@ -21,17 +22,22 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--grid", type=int, default=1000)
     run.add_argument("--constant-rate", type=float, default=1e-8)
     run.add_argument("--unfolded", action="store_true", help="Require valid INFO/AA")
-    run.add_argument("--evo", action="store_true")
+    run.add_argument("--ntv3", action="store_true", help="Enable bidirectional masked-base scoring")
     run.add_argument("--seqrepo", type=Path)
-    run.add_argument("--model", default="auto",
-                     choices=["auto", "evo2_40b", "evo2_7b", "evo2_1b_base"])
-    run.add_argument("--allow-rocm", action="store_true")
-    run.add_argument("--context", type=int, default=8192)
+    run.add_argument("--model", default=MODEL, choices=[MODEL])
+    run.add_argument("--model-revision", default=REVISION,
+                     help="Hub revision for NTv3 weights, tokenizer, and trusted custom code")
+    run.add_argument("--context", type=int, default=8192,
+                     help="NTv3 window length in bases: multiple of 128, at most 1048576")
     run.add_argument("--offsets", default="1024,4096,7168",
-                     help="0-based target offsets in oriented context; must be >=1")
-    run.add_argument("--evo-stride", type=int, default=1, help="Score every Nth eligible SNP")
+                     help="0-based masked target offsets in oriented context; may include 0")
+    run.add_argument("--ntv3-stride", type=int, default=1, help="Score every Nth eligible SNP")
     run.add_argument("--window-size", type=int, default=100000,
-                     help="Physical bins for exploratory Evo aggregation")
+                     help="Physical bins for exploratory NTv3 aggregation")
+    run.add_argument("--alpha", type=float, default=.05,
+                     help="Per-configuration, region-maximum empirical p-value cutoff for sweep BEDs")
+    run.add_argument("--null-summary", type=Path,
+                     help="Completed independent run's summary.tsv containing matched calibration controls")
     simulation = sub.add_parser("simulate", help="Generate reference-anchored neutral msprime controls")
     simulation.add_argument("--seqrepo", type=Path, required=True)
     simulation.add_argument("--dataset", choices=["testing", "final"], default="testing")
@@ -54,6 +60,10 @@ def parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--summary", type=Path, required=True)
     evaluation.add_argument("--alpha", type=float, default=.05)
     evaluation.add_argument("--output", type=Path, required=True)
+    regions = sub.add_parser("export-regions", help="Re-export BED evidence and sweep calls from a completed run")
+    regions.add_argument("--run-dir", type=Path, required=True)
+    regions.add_argument("--alpha", type=float, default=.05)
+    regions.add_argument("--null-summary", type=Path)
     return root
 
 
@@ -73,8 +83,12 @@ def main(argv: list[str] | None = None) -> None:
         from .simulation import estimate_b
 
         estimate_b(args.diversity, args.output, args.bootstrap, args.seed)
-    else:
+    elif args.command == "evaluate":
         benchmark.evaluate(args.summary, args.output, args.alpha)
+    else:
+        from .regions import export_regions
+
+        export_regions(args.run_dir, args.alpha, args.null_summary, require_complete=True)
 
 
 if __name__ == "__main__":

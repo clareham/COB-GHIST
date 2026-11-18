@@ -460,7 +460,7 @@ requires-dist = [
     { name = "python-dotenv" },
     { name = "synapseclient" },
     { name = "tqdm" },
-    { name = "transformers" },
+    { name = "transformers", specifier = ">=4.57.1" },
 ]
 
 [[package]]

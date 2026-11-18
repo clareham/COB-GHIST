@@ -30,9 +30,10 @@ SeqRepo, and Biopython, install by default. `uv pip` does not use `uv.lock`.
 uv selects the PyTorch backend automatically. For AMD, override `TORCH_BACKEND` if
 needed with a compatible ROCm channel listed by `uv pip install --help`.
 GPU drivers must already be installed; detection may fall back to CPU.
-**Evo 2 requires separate model/kernel setup and a supported GPU**; installing
-ROCm PyTorch alone is insufficient. See the
-[Evo 2 and reference setup guide](docs/sweep_experiments.md#environment-and-reference-sequences).
+**NTv3 scoring requires a working CUDA/ROCm GPU and access to gated model weights.**
+It uses the official PyTorch checkpoint, not Evo2/Vortex or Transformer Engine.
+See the [NTv3 and reference setup guide](docs/sweep_experiments.md#environment-and-reference-sequences)
+for model access, hardware validation, and licence requirements.
 
 ## Download data
 
@@ -65,11 +66,15 @@ targets are marked unavailable. See the
 [report documentation](nextflow/README.md#plotting-results) for output formats
 and custom result directories.
 
-## SweepFinder2 / Evo 2 experiments
+## SweepFinder2 / NTv3 experiments
 
 The independent `sweep-experiment` runner supports SweepFinder2 map comparisons,
-optional local Evo 2 context-offset scoring, reference-anchored neutral msprime
+optional local NTv3 masked-base context-offset scoring, reference-anchored neutral msprime
 controls, simulation-based B estimates, and held-out null calibration.
+Runs also export GHIST-format **headerless BED3** sweep regions, with empirical
+SF2 p-values and raw NTv3 evidence in separate decision tables. Significant calls
+require matched no-sweep calibration controls; otherwise only candidates are
+reported. See [BED exports and calibration](docs/sweep_experiments.md#ghist-bed-exports-and-decision-evidence).
 Check available commands:
 
 ```bash
@@ -79,9 +84,9 @@ sweep-experiment --help
 ```
 sweep-experiment run \
   --manifest examples/sweep_experiments.json \
-  --output experiment_results/sf2-evo \
+  --output experiment_results/sf2-ntv3 \
   --configurations physical,constant \
-  --evo --allow-rocm --model evo2_7b \
+  --ntv3 \
   --seqrepo /usr/local/share/seqrepo/2024-12-20
 ```
 
