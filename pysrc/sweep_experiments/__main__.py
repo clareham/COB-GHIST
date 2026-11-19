@@ -5,11 +5,11 @@ import logging
 from pathlib import Path
 
 from . import benchmark
-from .ntv3 import MODEL, REVISION
+from .ntv3 import MODEL
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="Exploratory SweepFinder2/NTv3 experiments")
+    root = argparse.ArgumentParser(description="Exploratory SweepFinder2 and genomic LM experiments")
     sub = root.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="Run a JSON experiment manifest")
     run.add_argument("--manifest", type=Path, required=True)
@@ -22,18 +22,21 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--grid", type=int, default=1000)
     run.add_argument("--constant-rate", type=float, default=1e-8)
     run.add_argument("--unfolded", action="store_true", help="Require valid INFO/AA")
-    run.add_argument("--ntv3", action="store_true", help="Enable bidirectional masked-base scoring")
+    glm = run.add_mutually_exclusive_group()
+    glm.add_argument("--ntv3", action="store_true", help="Enable bidirectional masked-base scoring")
+    glm.add_argument("--hyenadna", action="store_true", help="Enable HyenaDNA large causal next-base scoring")
     run.add_argument("--seqrepo", type=Path)
-    run.add_argument("--model", default=MODEL, choices=[MODEL])
-    run.add_argument("--model-revision", default=REVISION,
-                     help="Hub revision for NTv3 weights, tokenizer, and trusted custom code")
+    run.add_argument("--model", choices=[MODEL], help="Explicit NTv3 checkpoint (legacy option)")
+    run.add_argument("--model-revision",
+                     help="Override the selected model's pinned Hub revision (weights, tokenizer, and code)")
     run.add_argument("--context", type=int, default=8192,
-                     help="NTv3 window length in bases: multiple of 128, at most 1048576")
+                     help="Window length in bases (default: 8192; NTv3 requires a multiple of 128)")
     run.add_argument("--offsets", default="1024,4096,7168",
-                     help="0-based masked target offsets in oriented context; may include 0")
-    run.add_argument("--ntv3-stride", type=int, default=1, help="Score every Nth eligible SNP")
+                     help="0-based target offsets in oriented context; HyenaDNA requires offsets >= 1")
+    run.add_argument("--glm-stride", "--ntv3-stride", type=int, default=1,
+                     help="Score every Nth eligible SNP with the selected model")
     run.add_argument("--window-size", type=int, default=100000,
-                     help="Physical bins for exploratory NTv3 aggregation")
+                     help="Physical bins for exploratory genomic LM aggregation")
     run.add_argument("--alpha", type=float, default=.05,
                      help="Per-configuration, region-maximum empirical p-value cutoff for sweep BEDs")
     run.add_argument("--null-summary", type=Path,

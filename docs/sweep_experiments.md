@@ -1,4 +1,4 @@
-# SweepFinder2 and NTv3 experiments
+# SweepFinder2 and genomic language model experiments
 
 This is an exploratory benchmark, not a validated sweep caller. The console
 script `sweep-experiment` (also `python -m sweep_experiments`) provides `run`,
@@ -50,7 +50,7 @@ that a `rocm7.8` PyTorch wheel repository exists.
 Confirm your GPU, kernel driver, and host OS
 are compatible with the selected build; a newer management-library version alone
 does not establish compatibility.
-CPU PyTorch does not enable CPU inference in the NTv3 adapter.
+The NTv3 and HyenaDNA runners require GPU-enabled PyTorch; neither falls back to CPU.
 The documented `uv pip` installation does not consume `uv.lock`. Record
 `uv pip freeze --python "$CONDA_PREFIX/bin/python"`, `conda list --explicit`,
 and the selected backend with experiment results for reproducibility.
@@ -175,11 +175,11 @@ Each case produces:
 
 - Per-site `.freq` input and the actual `SweepFinder2 -f` background `.spect`.
 - SF2 scans and individual subprocess logs.
-- Optional `ntv3.tsv` per-SNP/per-context/per-strand probability rows.
+- Optional `ntv3.tsv` or `hyenadna.tsv` per-SNP/per-context/per-strand probability rows.
 - Top-level `summary.tsv`: maximum score, peak coordinate, truth, localization error.
 - Top-level `run.json`: arguments, input SHA-256 digests, commands, reference
   accessions and model revision, scoring semantics, precision, and backend
-  metadata under `ntv3` when scoring is enabled.
+  metadata under `ntv3` or `hyenadna` when scoring is enabled.
 - Automatic `regions/` BED3 predictions and separate SF2/gLM decision evidence;
   see [GHIST BED exports](#ghist-bed-exports-and-decision-evidence).
 
@@ -332,6 +332,49 @@ be noisy; this is a functional-compatibility proxy, **not a population-genetic
 likelihood or a calibrated sweep probability**. Fix scoring direction,
 stride, offsets, and window size before held-out evaluation.
 
+## HyenaDNA causal context-position experiments
+
+```bash
+sweep-experiment run \
+  --manifest examples/sweep_experiments.json \
+  --output experiment_results/hyenadna-contexts \
+  --configurations physical,constant \
+  --hyenadna --seqrepo /path/to/seqrepo \
+  --context 8192 --offsets 1024,4096,7168 --glm-stride 1000
+```
+
+`--hyenadna` is mutually exclusive with `--ntv3`. It selects the public
+[HyenaDNA large-1m checkpoint](https://huggingface.co/LongSafari/hyenadna-large-1m-seqlen-hf);
+no NTv3 approval is needed. The runner loads the Transformers tokenizer and
+causal LM with `trust_remote_code=True`, pinned to
+`0a629abf9c7f85b4ec9aa6a1aefa3adcf1907446` by default. Review the upstream code
+before using it. `--model-revision` overrides the pin for the selected backend.
+`--glm-stride` works with either model; `--ntv3-stride` is an alias.
+
+The adapter runs one float32 prefix at a time on GPU 0 through PyTorch and uses
+the upstream PyTorch FFT implementation. Start with the 8,192-base default
+window on a 24 GB Radeon RX 7900 XTX using a ROCm PyTorch build. The longest
+input with the default offsets is **7,168 bases**. The checkpoint supports up
+to 1,000,000 bases, but the upstream card recommends an A100 40 GB for the
+large model, and full-length inference is not assumed to fit on 24 GB.
+The runner probes the longest requested prefix at model load. If it runs out
+of memory, reduce the largest offset (and adjust the window if appropriate);
+there is no automatic model, precision, or device fallback.
+
+HyenaDNA uses one token per base, with no added special tokens. It scores the
+next base from the preceding bases in each oriented window: `--offsets` must
+be unique and satisfy `1 <= offset < context`, with no NTv3-style alignment
+requirement. The target and suffix do not enter the model. The same full-window
+contig-edge and ambiguity filters as NTv3 apply. Reverse-strand probabilities
+are reported in genomic orientation. A/C/G/T probabilities are normalized over
+the full model output, including padded vocabulary channels.
+
+Results use `hyenadna.tsv`, `hyenadna_mean_abs_delta` in `summary.tsv`, and
+`hyenadna.sites.bed` in the region exports. Use separate output directories and
+calibration controls for each backend. Causal scores are not interchangeable
+with NTv3's bidirectional masked-base scores. The gLM results annotate SF2
+regions but do not change which regions are called.
+
 ## Neutral controls and external SLiM datasets
 
 ```bash
@@ -446,9 +489,9 @@ For each configuration (`physical`, `constant`, `map`, `bmap` as enabled):
 | `<configuration>.sweeps.bed` | Proposed sweep regions passing the empirical SF2 cutoff. BED3 for GHIST submission review. Empty if none qualify or calibration is unavailable. |
 | `<configuration>.sf2.tsv` | All callable scan cells: coordinates, raw CLR, empirical p-value, null count, calibration status, and significance flag. |
 | `<configuration>.regions.tsv` | Candidate and predicted-region decisions: coordinates, peak location/CLR/p-value, calibration status, and overlapping raw gLM score summaries. |
-| `ntv3.sites.bed` | Unique successfully scored gLM SNPs as one-base BED3 intervals. **Evidence coverage, not sweep predictions.** Empty for SF2-only runs. |
+| `ntv3.sites.bed` or `hyenadna.sites.bed` | Unique successfully scored gLM SNPs as one-base BED3 intervals. **Evidence coverage, not sweep predictions.** SF2-only runs keep the empty `ntv3.sites.bed` for compatibility. |
 
-The original `<run>/<case>/ntv3.tsv` remains the **raw gLM output**, unchanged,
+The original `<run>/<case>/ntv3.tsv` or `<run>/<case>/hyenadna.tsv` remains the **raw gLM output**, unchanged,
 including signed REF/ALT log probabilities, `delta_logp`, A/C/G/T probabilities,
 strand, offset, context window, and unscored-status rows. It is not replaced
 with a ranking or rounded BED score. `regions/metadata.json` records its path
@@ -462,7 +505,7 @@ rows, mean absolute delta (average per SNP first, then across SNPs), and maximum
 absolute raw delta. `no_scored_sites` and `disabled` are explicit, not zero
 evidence. Consult the raw signed scores before making biological decisions.
 There is **no automatic gLM threshold, SF2/gLM intersection, or combined p-value**:
-NTv3 is a sequence-compatibility proxy, not a trained sweep caller. The default
+The gLM score is a sequence-compatibility proxy, not a trained sweep caller. The default
 prediction BED selection uses calibrated SF2 evidence; gLM informs manual review.
 
 ### SF2 p-values and null requirements

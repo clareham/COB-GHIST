@@ -66,13 +66,13 @@ targets are marked unavailable. See the
 [report documentation](nextflow/README.md#plotting-results) for output formats
 and custom result directories.
 
-## SweepFinder2 / NTv3 experiments
+## SweepFinder2 / genomic language model experiments
 
 The independent `sweep-experiment` runner supports SweepFinder2 map comparisons,
-optional local NTv3 masked-base context-offset scoring, reference-anchored neutral msprime
+optional local NTv3 masked-base or HyenaDNA causal next-base scoring, reference-anchored neutral msprime
 controls, simulation-based B estimates, and held-out null calibration.
 Runs also export GHIST-format **headerless BED3** sweep regions, with empirical
-SF2 p-values and raw NTv3 evidence in separate decision tables. Significant calls
+SF2 p-values and genomic language model evidence in separate decision tables. Significant calls
 require matched no-sweep calibration controls; otherwise only candidates are
 reported. See [BED exports and calibration](docs/sweep_experiments.md#ghist-bed-exports-and-decision-evidence).
 Check available commands:
@@ -90,5 +90,8 @@ sweep-experiment run \
   --seqrepo /usr/local/share/seqrepo/2024-12-20
 ```
 
-See the [experiment guide](docs/sweep_experiments.md) for manifests, examples,
+Use `--hyenadna` instead of `--ntv3` for the public HyenaDNA large checkpoint.
+Start in a new output directory with `--glm-stride 1000`; see the
+[HyenaDNA example](docs/sweep_experiments.md#hyenadna-causal-context-position-experiments)
+for ROCm and window-size guidance. See the [experiment guide](docs/sweep_experiments.md) for manifests, examples,
 reference data, and hardware limitations.

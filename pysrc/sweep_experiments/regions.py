@@ -205,11 +205,15 @@ def export_regions(run_dir: Path, alpha: float = .05, null_summary: Path | None 
     metadata["region_columns"] = region_columns
     metadata_file = output / "metadata.json"
     metadata_file.write_text(json.dumps(metadata, indent=2, allow_nan=False) + "\n")
+    arguments = provenance["arguments"]
+    glm_name = "hyenadna" if arguments.get("hyenadna") else "ntv3"
+    glm_enabled = arguments.get(glm_name, False)
+    glm_bed = f"{glm_name}.sites.bed"
     for name, case in provenance["cases"].items():
         directory = output / name
         directory.mkdir(exist_ok=True)
-        raw = run_dir / name / "ntv3.tsv" if provenance["arguments"]["ntv3"] else None
-        glm = GLMEvidence(raw, case["chrom"], directory / "ntv3.sites.bed")
+        raw = run_dir / name / f"{glm_name}.tsv" if glm_enabled else None
+        glm = GLMEvidence(raw, case["chrom"], directory / glm_bed)
         mask_path = Path(case["mask"])
         if digest(mask_path)["sha256"] != provenance["inputs"][f"{name}:mask"]["sha256"]:
             raise ValueError(f"{name}: callable mask changed since the scan")
@@ -217,7 +221,7 @@ def export_regions(run_dir: Path, alpha: float = .05, null_summary: Path | None 
         metadata["cases"][name] = {
             **case, "mask": digest(mask_path), "raw_glm": digest(raw) if raw else None,
             "scans": {}, "prediction_counts": {},
-            "files": ["ntv3.sites.bed", *(
+            "files": [glm_bed, *(
                 f"{configuration}.{suffix}" for configuration in configurations
                 for suffix in ("candidates.bed", "sweeps.bed", "sf2.tsv", "regions.tsv"))]}
         for configuration in configurations:

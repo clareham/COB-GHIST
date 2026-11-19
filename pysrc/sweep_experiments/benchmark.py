@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 
+from . import hyenadna, ntv3
 from .inputs import (Reference, check_mask, file_metadata, read_frequency, variants, write_bvalues,
                      write_frequency, write_recombination)
 from .calibration import empirical_p
@@ -33,7 +34,7 @@ def scan_peak(path: Path) -> tuple[float, float]:
     return max(points, key=lambda item: item[0])
 
 
-def ntv3_peak(path: Path, window_size: int) -> tuple[float, float]:
+def glm_peak(path: Path, window_size: int) -> tuple[float, float]:
     # Average strands/offsets per SNP first so missing contexts do not reweight SNPs.
     by_site: dict[int, list[float]] = {}
     with path.open() as handle:
@@ -44,7 +45,7 @@ def ntv3_peak(path: Path, window_size: int) -> tuple[float, float]:
     for position, scores in by_site.items():
         bins.setdefault((position - 1) // window_size, []).append(sum(scores) / len(scores))
     if not bins:
-        raise ValueError("No valid NTv3 scores to aggregate")
+        raise ValueError(f"{path}: no valid genomic LM scores to aggregate")
     index = max(bins, key=lambda key: sum(bins[key]) / len(bins[key]))
     return sum(bins[index]) / len(bins[index]), index * window_size + (window_size + 1) / 2
 
@@ -72,20 +73,35 @@ def run(args) -> Path:
     allowed = {"physical", "constant", "map", "bmap"}
     if not configurations or set(configurations) - allowed or len(set(configurations)) != len(configurations):
         raise ValueError(f"Configurations must be unique members of {sorted(allowed)}")
-    if args.grid < 2 or args.ntv3_stride < 1 or args.window_size < 1:
-        raise ValueError("Need grid >=2, positive NTv3 stride and window size")
+    if args.grid < 2 or args.glm_stride < 1 or args.window_size < 1:
+        raise ValueError("Need grid >=2, positive genomic LM stride and window size")
     if not 0 < args.alpha < 1:
         raise ValueError("alpha must be between 0 and 1")
     if args.null_summary is not None and not args.null_summary.is_file():
         raise FileNotFoundError(f"Null summary not found: {args.null_summary}")
-    if args.ntv3 and args.seqrepo is None:
-        raise ValueError("--ntv3 requires a locally populated --seqrepo")
-    if args.ntv3:
-        from .ntv3 import validate_context, windows
-
-        validate_context(args.context)
+    glm = "hyenadna" if args.hyenadna else "ntv3" if args.ntv3 else None
+    if glm == "hyenadna" and args.model is not None:
+        raise ValueError("--model specifies an NTv3 checkpoint and cannot be used with --hyenadna")
+    if glm and args.seqrepo is None:
+        raise ValueError(f"--{glm} requires a locally populated --seqrepo")
+    offsets = []
+    model = args.model
+    revision = args.model_revision
+    if glm:
         offsets = [int(value) for value in args.offsets.split(",")]
-        windows(args.context + 1, 3 * args.context, args.context, offsets)
+        if glm == "hyenadna":
+            hyenadna.validate_context(args.context, offsets)
+            model = hyenadna.MODEL
+            default_revision = hyenadna.REVISION
+        else:
+            ntv3.validate_context(args.context)
+            model = args.model or ntv3.MODEL
+            default_revision = ntv3.REVISION
+        ntv3.windows(args.context + 1, 3 * args.context, args.context, offsets)
+        if revision is None:
+            revision = default_revision
+        elif not revision:
+            raise ValueError("--model-revision must not be empty")
     executable = shutil.which(args.sweepfinder)
     if executable is None:
         raise FileNotFoundError(f"SweepFinder2 executable not found: {args.sweepfinder}")
@@ -97,7 +113,8 @@ def run(args) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     provenance = {"manifest": file_metadata(manifest_path), "arguments": {
         key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
-        if key != "func"}, "inputs": {}, "commands": [], "status": "running",
+        if key != "func"} | {"model": model, "model_revision": revision},
+        "inputs": {}, "commands": [], "status": "running",
         "sweepfinder_binary": file_metadata(Path(executable)), "bcftools_version": bcftools_version,
         "cases": {}}
     metadata_file = output / "run.json"
@@ -214,25 +231,26 @@ def run(args) -> Path:
                        "localization_error_bp": abs(position - float(truth)) if truth is not None else ""}
                 writer.writerow(row)
                 handle.flush()
-            if args.ntv3:
-                from .ntv3 import NTv3Predictor, score_sites
-
+            if glm:
                 reference = Reference(args.seqrepo, case["dataset"])
                 provenance.setdefault("references", {})[name] = {
                     "assembly": reference.ASSEMBLY, "accession": reference.accession}
-                selected = sites[::args.ntv3_stride]
+                selected = sites[::args.glm_stride]
                 # Validate coordinates before a model download or GPU allocation.
                 for site in selected:
                     reference.check(site)
                 if predictor is None:
-                    predictor = NTv3Predictor(args.model, args.model_revision, args.context)
-                    provenance["ntv3"] = predictor.metadata()
+                    assert model is not None and revision is not None
+                    predictor = (hyenadna.HyenaDNAPredictor(revision, args.context, offsets)
+                                 if glm == "hyenadna" else
+                                 ntv3.NTv3Predictor(model, revision, args.context))
+                    provenance[glm] = predictor.metadata()
                     save()
-                scores = directory / "ntv3.tsv"
-                score_sites(selected, reference, predictor, scores, args.context, offsets)
-                score, position = ntv3_peak(scores, args.window_size)
+                scores = directory / f"{glm}.tsv"
+                ntv3.score_sites(selected, reference, predictor, scores, args.context, offsets)
+                score, position = glm_peak(scores, args.window_size)
                 row = {"case": name, "scenario": scenario, "split": case["split"],
-                       "configuration": "ntv3_mean_abs_delta", "score": score,
+                       "configuration": f"{glm}_mean_abs_delta", "score": score,
                        "peak_position": position, "sweep_position": truth if truth is not None else "",
                        "localization_error_bp": abs(position - float(truth)) if truth is not None else ""}
                 writer.writerow(row)

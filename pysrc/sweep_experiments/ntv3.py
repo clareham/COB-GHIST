@@ -154,5 +154,5 @@ def score_sites(sites: list[Variant], reference: Reference, predictor: Predictor
                                  site.ref, site.alt, "", "", "", "", "", "", "",
                                  "contig_edge"])
     if written == 0:
-        raise ValueError("No NTv3 scores: check target positions, context length, and ambiguous bases")
+        raise ValueError(f"{output}: no scores; check target positions, context length, and ambiguous bases")
     return written

@@ -172,7 +172,8 @@ class ExperimentTests(unittest.TestCase):
                     "--output", str(self.root / "output")]
         args = parser().parse_args(required)
         self.assertFalse(args.ntv3)
-        self.assertEqual((args.model, args.model_revision), (ntv3.MODEL, ntv3.REVISION))
+        self.assertFalse(args.hyenadna)
+        self.assertIsNone(args.model_revision)
         with patch("sys.stderr"):
             for legacy in (["--evo"], ["--allow-rocm"], ["--model", "evo2_7b"],
                            ["--evo-stride", "1"]):
@@ -192,6 +193,30 @@ class ExperimentTests(unittest.TestCase):
         self.assertFalse(args.output.exists())
 
     def test_ntv3_runner_records_new_outputs_provenance_and_stride(self):
+        self._check_glm_runner("ntv3")
+
+    def test_hyenadna_runner_records_distinct_outputs_and_exports(self):
+        self._check_glm_runner("hyenadna")
+
+    def test_hyenadna_cli_rejects_conflicting_flags_and_invalid_context(self):
+        manifest = self.write("manifest.json", json.dumps({"cases": [{
+            "id": "test", "vcf": "sites.vcf", "split": "exploratory"}]}))
+        required = ["run", "--manifest", str(manifest), "--output", str(self.root / "run"),
+                    "--hyenadna"]
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            parser().parse_args(required + ["--ntv3"])
+        with self.assertRaisesRegex(ValueError, "--seqrepo"):
+            main(required)
+        for flags, message in ((["--context", "1000001"], "context must be"),
+                               (["--offsets", "0,64"], "offsets must satisfy"),
+                               (["--offsets", "64,64"], "unique")):
+            with self.subTest(flags=flags), self.assertRaisesRegex(ValueError, message):
+                main(required + ["--seqrepo", str(self.root), *flags])
+        self.assertFalse((self.root / "run").exists())
+
+    def _check_glm_runner(self, backend):
+        from pysrc.sweep_experiments import hyenadna
+
         manifest = self.write("manifest.json", json.dumps({"cases": [{
             "id": name, "vcf": "sites.vcf", "mask": "mask.bed", "dataset": "testing",
             "scenario": "unknown", "split": "exploratory"} for name in ("first", "second")]}))
@@ -200,8 +225,11 @@ class ExperimentTests(unittest.TestCase):
         executable = self.write("sf2", "fixture")
         sites = [inputs.Variant("7", p, "A", "G", 1, 4, True) for p in (257, 513, 769)]
         reference = SequenceReference("ACGT" * 512)
-        metadata = {"model": ntv3.MODEL, "revision": ntv3.REVISION,
-                    "scoring": "masked_target_bidirectional_logp_alt_minus_logp_ref"}
+        module = ntv3 if backend == "ntv3" else hyenadna
+        metadata = {"model": module.MODEL, "revision": module.REVISION}
+        predictor_name = "NTv3Predictor" if backend == "ntv3" else "HyenaDNAPredictor"
+        offsets = [0, 64, 127] if backend == "ntv3" else [1, 64, 127]
+        stride = "--ntv3-stride" if backend == "ntv3" else "--glm-stride"
         calls = []
 
         class Predictor:
@@ -221,36 +249,41 @@ class ExperimentTests(unittest.TestCase):
                 patch.object(benchmark, "variants", return_value=sites), \
                 patch.object(benchmark, "Reference", return_value=reference), \
                 patch.object(benchmark, "run_command", side_effect=run_command), \
-                patch.object(ntv3, "NTv3Predictor", return_value=Predictor()) as load:
+                patch.object(module, predictor_name, return_value=Predictor()) as load:
             main(["run", "--manifest", str(manifest), "--output", str(self.root / "run"),
-                  "--configurations", "physical", "--ntv3", "--seqrepo", str(self.root),
-                  "--context", "128", "--offsets", "0,64,127", "--ntv3-stride", "2"])
-        load.assert_called_once_with(ntv3.MODEL, ntv3.REVISION, 128)
+                  "--configurations", "physical", f"--{backend}", "--seqrepo", str(self.root),
+                  "--context", "128", "--offsets", ",".join(map(str, offsets)), stride, "2"])
+        if backend == "ntv3":
+            load.assert_called_once_with(ntv3.MODEL, ntv3.REVISION, 128)
+        else:
+            load.assert_called_once_with(hyenadna.REVISION, 128, offsets)
         self.assertEqual(len(calls), 24)
         output = self.root / "run"
-        with (output / "first" / "ntv3.tsv").open() as handle:
+        raw = output / "first" / f"{backend}.tsv"
+        with raw.open() as handle:
             rows = list(csv.DictReader(handle, delimiter="\t"))
         self.assertEqual({row["position"] for row in rows}, {"257", "769"})
         self.assertEqual({row["status"] for row in rows}, {"ok"})
         self.assertFalse((output / "first" / "evo.tsv").exists())
         provenance = json.loads((output / "run.json").read_text())
         self.assertEqual(provenance["status"], "complete")
-        self.assertEqual(provenance["ntv3"], metadata)
-        self.assertNotIn("evo", provenance)
+        self.assertEqual(provenance[backend], metadata)
+        self.assertEqual(provenance["arguments"]["model"], module.MODEL)
+        self.assertEqual(provenance["arguments"]["model_revision"], module.REVISION)
         regions = output / "regions" / "first"
         self.assertTrue((regions / "physical.candidates.bed").is_file())
         self.assertEqual((regions / "physical.sweeps.bed").read_text(), "")
-        self.assertEqual(len((regions / "ntv3.sites.bed").read_text().splitlines()), 2)
+        self.assertEqual(len((regions / f"{backend}.sites.bed").read_text().splitlines()), 2)
         for line in (regions / "physical.candidates.bed").read_text().splitlines():
             self.assertEqual(len(line.split("\t")), 3)
         export_metadata = json.loads((output / "regions" / "metadata.json").read_text())
         self.assertEqual(export_metadata["status"], "complete")
         self.assertEqual(export_metadata["cases"]["first"]["raw_glm"]["sha256"],
-                         benchmark.file_metadata(output / "first" / "ntv3.tsv")["sha256"])
+                         benchmark.file_metadata(raw)["sha256"])
         with (output / "summary.tsv").open() as handle:
             rows = list(csv.DictReader(handle, delimiter="\t"))
         self.assertEqual([row["configuration"] for row in rows],
-                         ["physical", "ntv3_mean_abs_delta"] * 2)
+                         ["physical", f"{backend}_mean_abs_delta"] * 2)
         self.assertAlmostEqual(float(rows[1]["score"]), (math.log(3) + math.log(2)) / 2)
 
     def test_runner_automatically_exports_calibrated_ghist_sweep_regions(self):
