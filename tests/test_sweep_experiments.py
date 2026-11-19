@@ -1,7 +1,9 @@
 """Numerical, format, real bcftools/SF2, and optional simulation integration tests."""
 
 import csv
+from contextlib import redirect_stderr
 import importlib.util
+import io
 import json
 import math
 import os
@@ -10,7 +12,7 @@ import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from pysrc.sweep_experiments import benchmark, ntv3, inputs, simulation
 from pysrc.sweep_experiments.__main__ import main, parser
@@ -122,6 +124,28 @@ class ExperimentTests(unittest.TestCase):
             genomic_target = (window.start + window.target if window.strand == "+"
                               else window.end - 1 - window.target)
             self.assertEqual(genomic_target, 16)
+
+    def test_scoring_progress_counts_variants_including_skipped_contexts(self):
+        reference = SequenceReference("ACGT" * 7 + "N" * 12)
+        sites = [inputs.Variant("7", position, "A", "G", 1, 4, True)
+                 for position in (17, 1, 33)]
+        predictor = SimpleNamespace(log_probs=Mock(
+            return_value={base: math.log(.25) for base in "ACGT"}))
+        output = self.root / "ntv3.tsv"
+        progress = io.StringIO()
+
+        with redirect_stderr(progress):
+            count = ntv3.score_sites(sites, reference, predictor, output, 8, [2])
+
+        self.assertIn("Scoring SNPs", progress.getvalue())
+        self.assertIn("3/3", progress.getvalue())
+        self.assertIn("variant", progress.getvalue())
+        self.assertEqual(count, 2)
+        self.assertEqual(predictor.log_probs.call_count, 2)
+        with output.open() as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual([row["status"] for row in rows],
+                         ["ok", "ok", "contig_edge", "ambiguous_context", "ambiguous_context"])
 
     def test_scoring_accepts_mismatching_ref_and_preserves_simulated_alleles(self):
         reference = SequenceReference("ACGT" * 10)

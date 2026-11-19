@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Protocol
 import csv
 
+from tqdm import tqdm
+
 from .inputs import Reference, Variant
 
 LOG = logging.getLogger(__name__)
@@ -121,12 +123,14 @@ class NTv3Predictor:
 def score_sites(sites: list[Variant], reference: Reference, predictor: Predictor,
                 output: Path, context: int, offsets: list[int]) -> int:
     written = 0
-    with output.open("w") as handle:
+    with output.open("w") as handle, tqdm(
+            sites, desc=f"Scoring SNPs ({output.parent.name}/{output.stem})",
+            unit="variant", dynamic_ncols=True) as progress:
         writer = csv.writer(handle, delimiter="\t")
         writer.writerow(["chrom", "position", "strand", "window_start0", "window_end0",
                          "offset", "context_length", "ref", "alt", "logp_ref", "logp_alt",
                          "delta_logp", "p_A", "p_C", "p_G", "p_T", "status"])
-        for site in sites:
+        for site in progress:
             reference.check(site)
             planned = windows(site.position, reference.length, context, offsets)
             for window in planned:

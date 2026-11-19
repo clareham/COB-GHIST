@@ -19,8 +19,8 @@ installed, run from the repository root:
 
    ```bash
    uv pip install --python "$CONDA_PREFIX/bin/python" -e .
-   TORCH_BACKEND=auto  # AMD override: use a compatible rocm channel if needed.
-   uv pip install --python "$CONDA_PREFIX/bin/python" --upgrade torch --torch-backend "$TORCH_BACKEND"
+   # AMD override: use a compatible rocm channel if needed.
+   uv pip install --python "$CONDA_PREFIX/bin/python" --upgrade torch --torch-backend auto
    ```
 
 Keep `ghist26` activated and run commands directly: no separate virtual
